@@ -1,21 +1,32 @@
-// template
 import { isLiquidGlassAvailable } from "expo-glass-effect";
 import { Tabs } from "expo-router";
 import { NativeTabs, Icon, Label } from "expo-router/unstable-native-tabs";
 import { BlurView } from "expo-blur";
 import { SymbolView } from "expo-symbols";
-import { Platform, StyleSheet, useColorScheme } from "react-native";
+import { Platform, StyleSheet, useColorScheme, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import React from "react";
-
 import Colors from "@/constants/colors";
 
-//IMPORTANT: iOS 26 Exists, feel free to use NativeTabs for native tabs with liquid glass support.
 function NativeTabLayout() {
   return (
     <NativeTabs>
       <NativeTabs.Trigger name="index">
-        <Icon sf={{ default: "house", selected: "house.fill" }} />
-        <Label>Home</Label>
+        <Icon sf={{ default: "checkmark.circle", selected: "checkmark.circle.fill" }} />
+        <Label>Habits</Label>
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="wallet">
+        <Icon sf={{ default: "wallet.pass", selected: "wallet.pass.fill" }} />
+        <Label>Wallet</Label>
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="rewards">
+        <Icon sf={{ default: "gift", selected: "gift.fill" }} />
+        <Label>Rewards</Label>
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="activity">
+        <Icon sf={{ default: "list.bullet", selected: "list.bullet" }} />
+        <Label>Activity</Label>
       </NativeTabs.Trigger>
     </NativeTabs>
   );
@@ -23,29 +34,42 @@ function NativeTabLayout() {
 
 function ClassicTabLayout() {
   const colorScheme = useColorScheme();
+  const safeAreaInsets = useSafeAreaInsets();
   const isDark = colorScheme === "dark";
+  const isWeb = Platform.OS === "web";
+  const isIOS = Platform.OS === "ios";
 
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors.light.tint,
+        headerShown: false,
+        tabBarActiveTintColor: Colors.primary,
         tabBarInactiveTintColor: Colors.light.tabIconDefault,
-        headerShown: true,
+        tabBarLabelStyle: {
+          fontFamily: "Nunito_600SemiBold",
+          fontSize: 11,
+        },
         tabBarStyle: {
           position: "absolute",
-          backgroundColor: Platform.select({
-            ios: "transparent",
-            android: isDark ? "#000" : "#fff",
-          }),
-          borderTopWidth: 0,
+          backgroundColor: isIOS ? "transparent" : isDark ? "#000" : "#fff",
+          borderTopWidth: isWeb ? 1 : 0,
+          borderTopColor: isDark ? "#333" : Colors.border,
           elevation: 0,
+          ...(isWeb ? { height: 84 } : {}),
         },
         tabBarBackground: () =>
-          Platform.OS === "ios" ? (
+          isIOS ? (
             <BlurView
               intensity={100}
               tint={isDark ? "dark" : "light"}
               style={StyleSheet.absoluteFill}
+            />
+          ) : isWeb ? (
+            <View
+              style={[
+                StyleSheet.absoluteFill,
+                { backgroundColor: isDark ? "#000" : "#fff" },
+              ]}
             />
           ) : null,
       }}
@@ -53,9 +77,36 @@ function ClassicTabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Home",
-          tabBarIcon: ({ color }) => (
-            <SymbolView name="house" tintColor={color} size={24} />
+          title: "Habits",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="checkmark-circle-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="wallet"
+        options={{
+          title: "Wallet",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="wallet-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="rewards"
+        options={{
+          title: "Rewards",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="gift-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="activity"
+        options={{
+          title: "Activity",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="list-outline" size={size} color={color} />
           ),
         }}
       />
