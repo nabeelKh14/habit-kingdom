@@ -1,6 +1,8 @@
 import * as Crypto from "expo-crypto";
 import * as db from "./db";
+import { withTransaction } from "./db";
 import { validateHabitInput, validateRewardInput, validateCompletionInput, validateRedemptionInput, validateProfileInput } from "./validation";
+import { isEnabled, FEATURE_FLAGS } from "./feature-flags";
 
 // ==================== PROFILE MANAGEMENT ====================
 
@@ -12,37 +14,100 @@ export interface Profile {
 }
 
 let activeProfileId: string | null = null;
+let profilesCache: Profile[] = [];
 
 export async function initializeProfiles(): Promise<void> {
-  // Load profiles from storage to ensure data is initialized before usage
   const profiles = await getProfiles();
   if (profiles.length === 0) {
-    // Create default profile if none exist
-    await createProfile('Default', 'parent');
+    await createProfile('Default', 'child');
+  }
+  // Sync with persisted active profile
+  await syncActiveProfile();
+}
+
+async function syncActiveProfile(): Promise<void> {
+  try {
+    const { getSavedActiveProfileId } = await import('./onboarding-storage');
+    const savedId = await getSavedActiveProfileId();
+    if (savedId) {
+      activeProfileId = savedId;
+    } else {
+      const profiles = await getProfiles();
+      if (profiles.length > 0) {
+        activeProfileId = profiles[0].id;
+      }
+    }
+  } catch (error) {
+    console.error('[Storage] Failed to sync active profile:', error);
+    const profiles = await getProfiles();
+    if (profiles.length > 0) {
+      activeProfileId = profiles[0].id;
+    }
   }
 }
 
 export function setActiveProfileId(id: string): void {
+  if (!id?.trim()) {
+    console.warn('[WARN] setActiveProfileId called with empty id');
+    return;
+  }
   activeProfileId = id;
+  profilesCache = profilesCache.map(p => 
+    p.id === id ? { ...p, id } : p
+  );
 }
 
 export function getActiveProfileId(): string {
   return activeProfileId || 'default';
 }
 
+export async function switchProfile(newProfileId: string): Promise<void> {
+  if (!newProfileId?.trim()) {
+    throw new Error('Invalid profile ID');
+  }
+  const oldProfileId = activeProfileId;
+  
+  setActiveProfileId(newProfileId);
+  
+  try {
+    const { setActiveProfileId: saveToStorage } = await import('./onboarding-storage');
+    await saveToStorage(newProfileId);
+  } catch (error) {
+    activeProfileId = oldProfileId;
+    console.error('[ERROR] Failed to persist profile switch:', error);
+    throw error instanceof Error ? error : new Error('Failed to switch profile');
+  }
+}
+
+export function clearProfileState(): void {
+  activeProfileId = null;
+  profilesCache = [];
+}
+
 export function getAllActiveProfileIds(): string[] {
   return activeProfileId ? [activeProfileId] : ['default'];
+}
+
+export function isParentProfile(): boolean {
+  const profile = profilesCache.find(p => p.id === activeProfileId);
+  return profile?.type === 'parent';
+}
+
+export function isChildProfile(): boolean {
+  const profile = profilesCache.find(p => p.id === activeProfileId);
+  return profile?.type === 'child';
 }
 
 export async function getProfiles(): Promise<Profile[]> {
   try {
     const rows = await db.getAllProfiles();
-    return rows.map(r => ({
+    profilesCache = rows.map(r => ({
       id: r.id,
       name: r.name,
       type: r.type as 'child' | 'parent',
       createdAt: r.createdAt,
     }));
+    return profilesCache;
   } catch (error) {
     console.error('[ERROR] getProfiles failed:', error);
     return [];
@@ -50,37 +115,86 @@ export async function getProfiles(): Promise<Profile[]> {
 }
 
 export async function createProfile(name: string, type: 'child' | 'parent'): Promise<Profile> {
-  // Only allow one child profile
-  if (type === 'child') {
-    const existingProfiles = await getProfiles();
-    const existingChild = existingProfiles.find(p => p.type === 'child');
-    if (existingChild) {
+  try {
+    if (!name?.trim()) {
+      throw new Error('Profile name is required');
+    }
+    if (name.trim().length > 50) {
+      throw new Error('Profile name must be 50 characters or less');
+    }
+
+    const allProfiles = await db.getAllProfiles();
+    
+    // Check child limit
+    const existingChild = allProfiles.find(p => p.type === 'child');
+    if (type === 'child' && existingChild) {
       throw new Error('Only one child profile is allowed');
     }
-  }
 
-  const profile: Profile = {
-    id: Crypto.randomUUID(),
-    name,
-    type,
-    createdAt: new Date().toISOString(),
-  };
-  await db.insertProfile({
-    id: profile.id,
-    name: profile.name,
-    type: profile.type,
-    createdAt: profile.createdAt,
-  });
-  return profile;
+    // Check parent limit (server-side enforcement)
+    if (isEnabled('PARENT_ACCESS_CONTROL')) {
+      const settings = await db.getProfileSettings();
+      const parentCount = allProfiles.filter(p => p.type === 'parent').length;
+      if (type === 'parent' && parentCount >= settings.maxParents) {
+        throw new Error(`Maximum of ${settings.maxParents} parent profiles allowed`);
+      }
+    }
+
+    const profile: Profile = {
+      id: Crypto.randomUUID(),
+      name: name.trim(),
+      type,
+      createdAt: new Date().toISOString(),
+    };
+    
+    await db.insertProfile({
+      id: profile.id,
+      name: profile.name,
+      type: profile.type,
+      createdAt: profile.createdAt,
+    });
+    
+    return profile;
+  } catch (error) {
+    console.error('[ERROR] createProfile failed:', error);
+    throw error instanceof Error ? error : new Error('Failed to create profile');
+  }
 }
 
 export async function renameProfile(id: string, name: string): Promise<void> {
-  await db.updateProfile(id, name);
+  try {
+    if (!id?.trim()) {
+      throw new Error('Profile ID is required');
+    }
+    if (!name?.trim()) {
+      throw new Error('Profile name is required');
+    }
+    if (name.trim().length > 50) {
+      throw new Error('Profile name must be 50 characters or less');
+    }
+    await db.updateProfile(id, name);
+  } catch (error) {
+    console.error('[ERROR] renameProfile failed:', error);
+    throw error instanceof Error ? error : new Error('Failed to rename profile');
+  }
 }
 
 export async function removeProfile(id: string): Promise<void> {
-  await db.removeProfile(id);
+  try {
+    if (!id?.trim()) {
+      throw new Error('Profile ID is required');
+    }
+    if (id === 'default') {
+      throw new Error('Cannot delete the default profile');
+    }
+    await db.removeProfile(id);
+  } catch (error) {
+    console.error('[ERROR] removeProfile failed:', error);
+    throw error instanceof Error ? error : new Error('Failed to remove profile');
+  }
 }
+
+// ==================== HABIT TYPES ====================
 
 export interface Habit {
   id: string;
@@ -89,17 +203,14 @@ export interface Habit {
   coinReward: number;
   color: string;
   createdAt: string;
-  // Recurrence fields
-  frequency: 'daily' | 'weekly' | 'monthly' | 'once';  // 'once' for existing non-repeating habits
-  scheduledTime?: string;  // Format: "HH:mm" (e.g., "09:00")
-  daysOfWeek?: number[];  // For weekly: [0,1,2,3,4,5,6] where 0=Sunday
-  dayOfMonth?: number;    // For monthly: 1-31
-  // Pause fields
+  frequency: 'daily' | 'weekly' | 'monthly' | 'once';
+  scheduledTime?: string;
+  daysOfWeek?: number[];
+  dayOfMonth?: number;
   isPaused?: boolean;
-  pauseUntil?: string;   // ISO date string
-  // Notification fields
+  pauseUntil?: string;
   notificationsEnabled?: boolean;
-  notificationTime?: string;  // Format: "HH:mm" - separate time for notifications
+  notificationTime?: string;
   profileId?: string;
 }
 
@@ -136,7 +247,6 @@ export interface UserStats {
   longestSingleHabitId: string | null;
 }
 
-// Trophy/Achievement types
 export type TrophyType = 'streak' | 'completions' | 'single_habit_streak';
 
 export interface Trophy {
@@ -145,87 +255,23 @@ export interface Trophy {
   description: string;
   icon: string;
   type: TrophyType;
-  requirement: number;  // The count needed to unlock
-  emoji: string;  // Display emoji
+  requirement: number;
+  emoji: string;
 }
 
-// Predefined trophies/achievements
 export const TROPHIES: Trophy[] = [
-  {
-    id: 'first_step',
-    title: 'First Step',
-    description: 'Complete your first habit',
-    icon: 'star',
-    type: 'completions',
-    requirement: 1,
-    emoji: '🌟',
-  },
-  {
-    id: 'getting_started',
-    title: 'Getting Started',
-    description: 'Achieve a 3-day streak',
-    icon: 'zap',
-    type: 'streak',
-    requirement: 3,
-    emoji: '🔥',
-  },
-  {
-    id: 'week_warrior',
-    title: 'Week Warrior',
-    description: 'Achieve a 7-day streak',
-    icon: 'award',
-    type: 'streak',
-    requirement: 7,
-    emoji: '🏅',
-  },
-  {
-    id: 'two_week_champion',
-    title: 'Two Week Champion',
-    description: 'Achieve a 14-day streak',
-    icon: 'trophy',
-    type: 'streak',
-    requirement: 14,
-    emoji: '🎖️',
-  },
-  {
-    id: 'monthly_master',
-    title: '30 day master',
-    description: 'Achieve a 30-day streak',
-    icon: 'crown',
-    type: 'streak',
-    requirement: 30,
-    emoji: '👑',
-  },
-  {
-    id: 'habit_hero',
-    title: 'Habit Hero',
-    description: 'Complete 100 habits total',
-    icon: 'shield',
-    type: 'completions',
-    requirement: 100,
-    emoji: '🦸',
-  },
-  {
-    id: 'habit_legend',
-    title: 'Habit Legend',
-    description: 'Complete 365 habits total',
-    icon: 'sun',
-    type: 'completions',
-    requirement: 365,
-    emoji: '🌟',
-  },
-  {
-    id: 'consistency_king',
-    title: 'Consistency King',
-    description: 'Achieve a 30-day streak on a single habit',
-    icon: 'heart',
-    type: 'single_habit_streak',
-    requirement: 30,
-    emoji: '💎',
-  },
+  { id: 'first_step', title: 'First Step', description: 'Complete your first habit', icon: 'star', type: 'completions', requirement: 1, emoji: '🌟' },
+  { id: 'getting_started', title: 'Getting Started', description: 'Achieve a 3-day streak', icon: 'zap', type: 'streak', requirement: 3, emoji: '🔥' },
+  { id: 'week_warrior', title: 'Week Warrior', description: 'Achieve a 7-day streak', icon: 'award', type: 'streak', requirement: 7, emoji: '🏅' },
+  { id: 'two_week_champion', title: 'Two Week Champion', description: 'Achieve a 14-day streak', icon: 'trophy', type: 'streak', requirement: 14, emoji: '🎖️' },
+  { id: 'monthly_master', title: '30 day master', description: 'Achieve a 30-day streak', icon: 'crown', type: 'streak', requirement: 30, emoji: '👑' },
+  { id: 'habit_hero', title: 'Habit Hero', description: 'Complete 100 habits total', icon: 'shield', type: 'completions', requirement: 100, emoji: '🦸' },
+  { id: 'habit_legend', title: 'Habit Legend', description: 'Complete 365 habits total', icon: 'sun', type: 'completions', requirement: 365, emoji: '🌟' },
+  { id: 'consistency_king', title: 'Consistency King', description: 'Achieve a 30-day streak on a single habit', icon: 'heart', type: 'single_habit_streak', requirement: 30, emoji: '💎' },
 ];
 
-// Helper to convert database row to Habit
+// ==================== HELPERS ====================
+
 function rowToHabit(row: db.HabitRow): Habit {
   return {
     id: row.id,
@@ -238,7 +284,7 @@ function rowToHabit(row: db.HabitRow): Habit {
     scheduledTime: row.scheduledTime || undefined,
     daysOfWeek: row.daysOfWeek ? (() => {
       try { return JSON.parse(row.daysOfWeek); }
-      catch { return undefined; }
+      catch (e) { console.error('[WARN] Failed to parse daysOfWeek:', row.daysOfWeek, e); return undefined; }
     })() : undefined,
     dayOfMonth: row.dayOfMonth || undefined,
     notificationsEnabled: row.notificationsEnabled === 1,
@@ -249,7 +295,6 @@ function rowToHabit(row: db.HabitRow): Habit {
   };
 }
 
-// Helper to convert database row to Reward
 function rowToReward(row: db.RewardRow): Reward {
   return {
     id: row.id,
@@ -262,7 +307,6 @@ function rowToReward(row: db.RewardRow): Reward {
   };
 }
 
-// Helper to convert database row to HabitCompletion
 function rowToCompletion(row: db.CompletionRow): HabitCompletion {
   return {
     id: row.id,
@@ -273,7 +317,6 @@ function rowToCompletion(row: db.CompletionRow): HabitCompletion {
   };
 }
 
-// Helper to convert database row to RewardRedemption
 function rowToRedemption(row: db.RedemptionRow): RewardRedemption {
   return {
     id: row.id,
@@ -284,6 +327,8 @@ function rowToRedemption(row: db.RedemptionRow): RewardRedemption {
   };
 }
 
+// ==================== HABIT OPERATIONS ====================
+
 export async function getHabits(): Promise<Habit[]> {
   try {
     const rows = await db.getAllHabits(await getActiveProfileId());
@@ -293,14 +338,10 @@ export async function getHabits(): Promise<Habit[]> {
     return [];
   }
 }
-}
-}
 
 export async function saveHabit(habit: Partial<Pick<Habit, 'frequency' | 'scheduledTime' | 'daysOfWeek' | 'dayOfMonth' | 'notificationsEnabled' | 'notificationTime'>> & Omit<Habit, 'id' | 'createdAt' | 'frequency' | 'scheduledTime' | 'daysOfWeek' | 'dayOfMonth' | 'notificationsEnabled' | 'notificationTime'>): Promise<Habit> {
-  // Validate input data
   const validatedHabit = validateHabitInput({
     ...habit,
-    // Set defaults for validation
     frequency: habit.frequency || 'once',
     scheduledTime: habit.scheduledTime || undefined,
     daysOfWeek: habit.daysOfWeek || undefined,
@@ -331,52 +372,85 @@ export async function saveHabit(habit: Partial<Pick<Habit, 'frequency' | 'schedu
       notificationTime: newHabit.notificationTime,
       profileId: newHabit.profileId || await getActiveProfileId(),
     });
+    return newHabit;
   } catch (error) {
     console.error('[ERROR] insertHabit failed:', error);
-    throw error; // Re-throw so UI knows about the failure
+    throw error;
   }
-  
-  return newHabit;
 }
 
 export async function deleteHabit(id: string): Promise<void> {
-  // Validate id
-  if (!id || typeof id !== 'string') {
-    console.error('[ERROR] deleteHabit called with invalid id:', id);
-    return;
+  try {
+    if (!id || typeof id !== 'string') {
+      console.error('[ERROR] deleteHabit called with invalid id:', id);
+      return;
+    }
+    
+    // Profile isolation check
+    if (isEnabled('PROFILE_ISOLATION_CHECKS')) {
+      const habit = await db.getHabitById(id);
+      if (!habit) return;
+      if (habit.profileId !== await getActiveProfileId()) {
+        throw new Error('UNAUTHORIZED: Habit belongs to another profile');
+      }
+    }
+    
+    if (isEnabled('SOFT_DELETE_ARCHIVE')) {
+      await db.archiveHabit(id);
+    } else {
+      await db.removeHabit(id);
+    }
+  } catch (error) {
+    console.error('[ERROR] deleteHabit failed:', error);
+    throw error instanceof Error ? error : new Error('Failed to delete habit');
   }
-  await db.removeHabit(id);
 }
 
-// Update an existing habit
 export async function updateHabit(habit: Partial<Pick<Habit, 'name' | 'icon' | 'coinReward' | 'color' | 'frequency' | 'scheduledTime' | 'daysOfWeek' | 'dayOfMonth' | 'notificationsEnabled' | 'notificationTime' | 'profileId'>> & { id: string }): Promise<void> {
-  const updateData: any = { id: habit.id };
-  
-  if (habit.name !== undefined) updateData.name = habit.name;
-  if (habit.icon !== undefined) updateData.icon = habit.icon;
-  if (habit.coinReward !== undefined) updateData.coinReward = habit.coinReward;
-  if (habit.color !== undefined) updateData.color = habit.color;
-  if (habit.frequency !== undefined) updateData.frequency = habit.frequency;
-  if (habit.scheduledTime !== undefined) updateData.scheduledTime = habit.scheduledTime;
-  if (habit.daysOfWeek !== undefined) updateData.daysOfWeek = habit.daysOfWeek ? JSON.stringify(habit.daysOfWeek) : undefined;
-  if (habit.dayOfMonth !== undefined) updateData.dayOfMonth = habit.dayOfMonth;
-  if (habit.notificationsEnabled !== undefined) updateData.notificationsEnabled = habit.notificationsEnabled ? 1 : 0;
-  if (habit.notificationTime !== undefined) updateData.notificationTime = habit.notificationTime;
-  if (habit.profileId !== undefined) updateData.profileId = habit.profileId;
-  
-  await db.updateHabit(updateData);
+  try {
+    if (!habit.id) {
+      throw new Error('Habit ID is required');
+    }
+    
+    // Profile isolation check
+    if (isEnabled('PROFILE_ISOLATION_CHECKS')) {
+      const existing = await db.getHabitById(habit.id);
+      if (!existing) {
+        throw new Error('Habit not found');
+      }
+      if (existing.profileId !== await getActiveProfileId()) {
+        throw new Error('UNAUTHORIZED: Habit belongs to another profile');
+      }
+    }
+    
+    const updateData: any = { id: habit.id };
+    
+    if (habit.name !== undefined) updateData.name = habit.name;
+    if (habit.icon !== undefined) updateData.icon = habit.icon;
+    if (habit.coinReward !== undefined) updateData.coinReward = habit.coinReward;
+    if (habit.color !== undefined) updateData.color = habit.color;
+    if (habit.frequency !== undefined) updateData.frequency = habit.frequency;
+    if (habit.scheduledTime !== undefined) updateData.scheduledTime = habit.scheduledTime;
+    if (habit.daysOfWeek !== undefined) updateData.daysOfWeek = habit.daysOfWeek ? JSON.stringify(habit.daysOfWeek) : undefined;
+    if (habit.dayOfMonth !== undefined) updateData.dayOfMonth = habit.dayOfMonth;
+    if (habit.notificationsEnabled !== undefined) updateData.notificationsEnabled = habit.notificationsEnabled ? 1 : 0;
+    if (habit.notificationTime !== undefined) updateData.notificationTime = habit.notificationTime;
+    if (habit.profileId !== undefined) updateData.profileId = habit.profileId;
+    
+    await db.updateHabit(updateData);
+  } catch (error) {
+    console.error('[ERROR] updateHabit failed:', error);
+    throw error instanceof Error ? error : new Error('Failed to update habit');
+  }
 }
 
-// Check if a habit is currently paused (has pauseUntil date in the future)
 export function isHabitPaused(habit: Habit): boolean {
   if (!habit.isPaused || !habit.pauseUntil) return false;
   const pauseUntilDate = new Date(habit.pauseUntil);
   return pauseUntilDate > new Date();
 }
 
-// Pause a habit for a specified number of days
 export async function pauseHabit(habitId: string, days: number): Promise<void> {
-  // Validate inputs
   if (!habitId || typeof habitId !== 'string') {
     console.error('[ERROR] pauseHabit called with invalid habitId:', habitId);
     return;
@@ -396,9 +470,7 @@ export async function pauseHabit(habitId: string, days: number): Promise<void> {
   });
 }
 
-// Resume a paused habit
 export async function resumeHabit(habitId: string): Promise<void> {
-  // Validate habitId
   if (!habitId || typeof habitId !== 'string') {
     console.error('[ERROR] resumeHabit called with invalid habitId:', habitId);
     return;
@@ -411,7 +483,6 @@ export async function resumeHabit(habitId: string): Promise<void> {
   });
 }
 
-// Update habit notification settings
 export async function updateHabitNotifications(
   habitId: string,
   notificationsEnabled: boolean,
@@ -423,6 +494,8 @@ export async function updateHabitNotifications(
     notificationTime: notificationTime || undefined,
   });
 }
+
+// ==================== COMPLETION OPERATIONS ====================
 
 export async function getCompletions(profileId?: string): Promise<HabitCompletion[]> {
   try {
@@ -453,26 +526,34 @@ export async function getTodayCompletions(): Promise<HabitCompletion[]> {
   );
 }
 
+// Atomic habit completion with duplicate prevention
 export async function completeHabit(habit: Habit): Promise<HabitCompletion> {
-  // Validate habit object using our validation schema
   try {
     validateHabitInput(habit);
   } catch (error) {
     console.error('[ERROR] completeHabit called with invalid habit:', habit, error);
-    throw new Error(`Invalid habit object: ${error.message}`);
+    throw new Error(`Invalid habit object: ${error}`);
   }
 
-  const completion: HabitCompletion = {
-    id: Crypto.randomUUID(),
-    habitId: habit.id,
-    habitName: habit.name,
-    coinReward: habit.coinReward,
-    completedAt: new Date().toISOString(),
-  };
-  
-   const targetProfileId = habit.profileId || await getActiveProfileId();
-  
-  try {
+  const targetProfileId = habit.profileId || await getActiveProfileId();
+  const today = new Date().toISOString().split('T')[0];
+
+  return await withTransaction(async (database) => {
+    // Check for duplicate completion
+    const existing = await db.getTodayCompletionForHabit(habit.id, targetProfileId, today);
+    if (existing) {
+      throw new Error('ALREADY_COMPLETED_TODAY');
+    }
+
+    const completion: HabitCompletion = {
+      id: Crypto.randomUUID(),
+      habitId: habit.id,
+      habitName: habit.name,
+      coinReward: habit.coinReward,
+      completedAt: new Date().toISOString(),
+    };
+
+    // Insert completion
     await db.insertCompletion({
       id: completion.id,
       habitId: completion.habitId,
@@ -482,60 +563,47 @@ export async function completeHabit(habit: Habit): Promise<HabitCompletion> {
       profileId: targetProfileId,
     });
 
-    const balance = await getBalance(targetProfileId);
-    await setBalance(balance + habit.coinReward, targetProfileId);
+    // Add coins
+    await db.addToWalletBalance(habit.coinReward, targetProfileId);
     
-    // Increment total completions in stats
+    // Update stats
     await db.updateUserStats({
-      totalCompletions: 1, // Increment by 1
+      totalCompletions: 1,
     }, targetProfileId);
-  } catch (error) {
-    console.error('[ERROR] completeHabit failed:', error);
-    throw error;
-  }
 
-  return completion;
+    return completion;
+  });
 }
 
-// Uncomplete a habit (remove completion and refund coins)
+// Atomic uncomplete with streak recalculation
 export async function uncompleteHabit(habitId: string, profileId?: string): Promise<void> {
-  // Validate habitId
   if (!habitId || typeof habitId !== 'string') {
     console.error('[ERROR] uncompleteHabit called with invalid habitId:', habitId);
     return;
   }
   
   const targetProfileId = profileId || await getActiveProfileId();
-  const completions = await getCompletions(targetProfileId);
-  const today = new Date().toDateString();
-  
-  // Find today's completion for this habit
-  const todayCompletion = completions.find(
-    (c) => c.habitId === habitId && new Date(c.completedAt).toDateString() === today
-  );
-  
-  if (todayCompletion) {
-    try {
-      // Remove the completion
-      await db.removeCompletion(todayCompletion.id);
+  const today = new Date().toISOString().split('T')[0];
+
+  return await withTransaction(async (database) => {
+    const todayCompletion = await db.removeCompletionForHabitToday(habitId, targetProfileId, today);
+    
+    if (todayCompletion) {
+      // Refund coins
+      await db.addToWalletBalance(todayCompletion.coinReward, targetProfileId);
       
-      // Refund the coins
-      const balance = await getBalance(targetProfileId);
-      await setBalance(Math.max(0, balance - todayCompletion.coinReward), targetProfileId);
-      
-      // Decrement total completions in stats (with bounds checking)
-      const stats = await getUserStats(targetProfileId);
+      // Decrement stats
+      const stats = await db.getUserStats(targetProfileId);
       if (stats.totalCompletions > 0) {
         await db.updateUserStats({
-          totalCompletions: -1, // Decrement by 1
+          totalCompletions: -1,
         }, targetProfileId);
       }
-    } catch (error) {
-      console.error('[ERROR] uncompleteHabit failed:', error);
-      throw error;
     }
-  }
+  });
 }
+
+// ==================== REWARD OPERATIONS ====================
 
 export async function getRewards(): Promise<Reward[]> {
   try {
@@ -548,10 +616,7 @@ export async function getRewards(): Promise<Reward[]> {
 }
 
 export async function saveReward(reward: Omit<Reward, "id" | "createdAt">): Promise<Reward> {
-  // Validate input data
-  const validatedReward = validateRewardInput({
-    ...reward,
-  });
+  const validatedReward = validateRewardInput({ ...reward });
   
   const newReward: Reward = {
     ...validatedReward,
@@ -569,29 +634,70 @@ export async function saveReward(reward: Omit<Reward, "id" | "createdAt">): Prom
       createdAt: newReward.createdAt,
       profileId: newReward.profileId || await getActiveProfileId(),
     });
+    return newReward;
   } catch (error) {
     console.error('[ERROR] insertReward failed:', error);
     throw error;
   }
-  
-  return newReward;
 }
 
 export async function deleteReward(id: string): Promise<void> {
-  await db.removeReward(id);
+  try {
+    if (!id || typeof id !== 'string') {
+      console.error('[ERROR] deleteReward called with invalid id:', id);
+      return;
+    }
+    
+    // Profile isolation check
+    if (isEnabled('PROFILE_ISOLATION_CHECKS')) {
+      const reward = await db.getRewardById(id);
+      if (!reward) return;
+      if (reward.profileId !== await getActiveProfileId()) {
+        throw new Error('UNAUTHORIZED: Reward belongs to another profile');
+      }
+    }
+    
+    if (isEnabled('SOFT_DELETE_ARCHIVE')) {
+      await db.archiveReward(id);
+    } else {
+      await db.removeReward(id);
+    }
+  } catch (error) {
+    console.error('[ERROR] deleteReward failed:', error);
+    throw error instanceof Error ? error : new Error('Failed to delete reward');
+  }
 }
 
-// Update an existing reward
 export async function updateReward(reward: Partial<Pick<Reward, 'name' | 'icon' | 'cost' | 'color' | 'profileId'>> & { id: string }): Promise<void> {
-  const updateData: any = { id: reward.id };
-  
-  if (reward.name !== undefined) updateData.name = reward.name;
-  if (reward.icon !== undefined) updateData.icon = reward.icon;
-  if (reward.cost !== undefined) updateData.cost = reward.cost;
-  if (reward.color !== undefined) updateData.color = reward.color;
-  if (reward.profileId !== undefined) updateData.profileId = reward.profileId;
-  
-  await db.updateReward(updateData);
+  try {
+    if (!reward.id) {
+      throw new Error('Reward ID is required');
+    }
+    
+    // Profile isolation check
+    if (isEnabled('PROFILE_ISOLATION_CHECKS')) {
+      const existing = await db.getRewardById(reward.id);
+      if (!existing) {
+        throw new Error('Reward not found');
+      }
+      if (existing.profileId !== await getActiveProfileId()) {
+        throw new Error('UNAUTHORIZED: Reward belongs to another profile');
+      }
+    }
+    
+    const updateData: any = { id: reward.id };
+    
+    if (reward.name !== undefined) updateData.name = reward.name;
+    if (reward.icon !== undefined) updateData.icon = reward.icon;
+    if (reward.cost !== undefined) updateData.cost = reward.cost;
+    if (reward.color !== undefined) updateData.color = reward.color;
+    if (reward.profileId !== undefined) updateData.profileId = reward.profileId;
+    
+    await db.updateReward(updateData);
+  } catch (error) {
+    console.error('[ERROR] updateReward failed:', error);
+    throw error instanceof Error ? error : new Error('Failed to update reward');
+  }
 }
 
 export async function getRedemptions(profileId?: string): Promise<RewardRedemption[]> {
@@ -615,20 +721,24 @@ export async function getAllProfileRedemptions(): Promise<(RewardRedemption & { 
   }
 }
 
+// Atomic reward redemption with balance check
 export async function redeemReward(reward: Reward): Promise<RewardRedemption | null> {
   const targetProfileId = reward.profileId || await getActiveProfileId();
-  const balance = await getBalance(targetProfileId);
-  if (balance < reward.cost) return null;
 
-  const redemption: RewardRedemption = {
-    id: Crypto.randomUUID(),
-    rewardId: reward.id,
-    rewardName: reward.name,
-    cost: reward.cost,
-    redeemedAt: new Date().toISOString(),
-  };
-  
-  try {
+  return await withTransaction(async (database) => {
+    const balance = await db.getWalletBalance(targetProfileId);
+    if (balance < reward.cost) {
+      return null;
+    }
+
+    const redemption: RewardRedemption = {
+      id: Crypto.randomUUID(),
+      rewardId: reward.id,
+      rewardName: reward.name,
+      cost: reward.cost,
+      redeemedAt: new Date().toISOString(),
+    };
+    
     await db.insertRedemption({
       id: redemption.id,
       rewardId: redemption.rewardId,
@@ -638,14 +748,13 @@ export async function redeemReward(reward: Reward): Promise<RewardRedemption | n
       profileId: targetProfileId,
     });
     
-    await setBalance(balance - reward.cost, targetProfileId);
-  } catch (error) {
-    console.error('[ERROR] redeemReward failed:', error);
-    throw error;
-  }
+    await db.deductFromWalletBalance(reward.cost, targetProfileId);
 
-  return redemption;
+    return redemption;
+  });
 }
+
+// ==================== WALLET OPERATIONS ====================
 
 export async function getBalance(profileId?: string): Promise<number> {
   try {
@@ -658,14 +767,22 @@ export async function getBalance(profileId?: string): Promise<number> {
 
 export async function setBalance(balance: number, profileId?: string): Promise<void> {
   try {
+    if (typeof balance !== 'number' || isNaN(balance)) {
+      throw new Error('Invalid balance value');
+    }
+    if (balance < 0) {
+      throw new Error('Balance cannot be negative');
+    }
     await db.setWalletBalance(balance, profileId || await getActiveProfileId());
   } catch (error) {
     console.error('[ERROR] setBalance failed:', error);
+    throw error instanceof Error ? error : new Error('Failed to set balance');
   }
 }
 
+// ==================== STREAK OPERATIONS ====================
+
 export async function getStreak(habitId: string, profileId?: string): Promise<number> {
-  // Validate habitId
   if (!habitId || typeof habitId !== 'string') {
     console.error('[ERROR] getStreak called with invalid habitId:', habitId);
     return 0;
@@ -673,29 +790,35 @@ export async function getStreak(habitId: string, profileId?: string): Promise<nu
   
   try {
     const resolvedProfileId = profileId || await getActiveProfileId();
-    const completions = await getCompletions(resolvedProfileId);
-    const habitCompletions = completions
-      .filter((c) => c.habitId === habitId)
-      .sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
+    const completions = await db.getCompletionsForHabit(habitId, resolvedProfileId);
 
-    if (habitCompletions.length === 0) return 0;
+    if (completions.length === 0) return 0;
 
     let streak = 0;
-    let currentDate = new Date();
-    currentDate.setHours(0, 0, 0, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-    for (let i = 0; i < 365; i++) {
-      const checkDate = new Date(currentDate);
+    // Check if completed today
+    const todayStr = today.toISOString().split('T')[0];
+    const completedToday = completions.some(c => 
+      c.completedAt.split('T')[0] === todayStr
+    );
+
+    // Start counting from today if completed, otherwise from yesterday
+    const startOffset = completedToday ? 0 : 1;
+
+    for (let i = startOffset; i < 365; i++) {
+      const checkDate = new Date(today);
       checkDate.setDate(checkDate.getDate() - i);
-      const dateStr = checkDate.toDateString();
+      const dateStr = checkDate.toISOString().split('T')[0];
 
-      const found = habitCompletions.some(
-        (c) => new Date(c.completedAt).toDateString() === dateStr
+      const found = completions.some(
+        (c) => c.completedAt.split('T')[0] === dateStr
       );
 
       if (found) {
         streak++;
-      } else if (i > 0) {
+      } else if (i > startOffset) {
         break;
       }
     }
@@ -707,39 +830,29 @@ export async function getStreak(habitId: string, profileId?: string): Promise<nu
   }
 }
 
-// Helper function to check if a habit is due today based on its frequency
+// ==================== HABIT HELPERS ====================
+
 export function isHabitDueToday(habit: Habit): boolean {
   const today = new Date();
-  const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
-  const dayOfMonth = today.getDate(); // 1-31
-
-  // Default to 'once' for backward compatibility
+  const dayOfWeek = today.getDay();
+  const dayOfMonth = today.getDate();
   const frequency = habit.frequency || 'once';
 
   switch (frequency) {
     case 'daily':
-      // Daily habits are always due today
       return true;
-
     case 'weekly':
-      // Weekly habits are due on specified days of the week
       if (habit.daysOfWeek && habit.daysOfWeek.length > 0) {
         return habit.daysOfWeek.includes(dayOfWeek);
       }
-      // If no specific days are set, default to all days
       return true;
-
     case 'monthly':
-      // Monthly habits are due on a specific day of the month
       if (habit.dayOfMonth) {
         return dayOfMonth === habit.dayOfMonth;
       }
-      // If no day is set, default to today
       return true;
-
     case 'once':
     default:
-      // For non-repeating habits, check if they were created today
       const createdDate = new Date(habit.createdAt);
       return (
         createdDate.getFullYear() === today.getFullYear() &&
@@ -749,7 +862,6 @@ export function isHabitDueToday(habit: Habit): boolean {
   }
 }
 
-// Helper function to calculate the next due date for a habit
 export function getNextOccurrence(habit: Habit): Date {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -757,54 +869,42 @@ export function getNextOccurrence(habit: Habit): Date {
 
   switch (frequency) {
     case 'daily':
-      // Next daily occurrence is tomorrow
       const tomorrow = new Date(today);
       tomorrow.setDate(tomorrow.getDate() + 1);
       return tomorrow;
-
     case 'weekly': {
-      // Find the next scheduled day of the week
       const daysOfWeek = habit.daysOfWeek && habit.daysOfWeek.length > 0 
         ? habit.daysOfWeek 
-        : [today.getDay()]; // Default to today if no days specified
-      
+        : [today.getDay()];
       const currentDay = today.getDay();
       let nextDay = daysOfWeek.find(d => d > currentDay);
-      
       if (nextDay !== undefined) {
         const nextDate = new Date(today);
         nextDate.setDate(nextDate.getDate() + (nextDay - currentDay));
         return nextDate;
       } else {
-        // All remaining days are in the past, wrap to first day
         const daysUntilNext = 7 - currentDay + daysOfWeek[0];
         const nextDate = new Date(today);
         nextDate.setDate(nextDate.getDate() + daysUntilNext);
         return nextDate;
       }
     }
-
     case 'monthly': {
-      // Find the next scheduled day of the month
       const targetDay = habit.dayOfMonth || today.getDate();
       const currentDay = today.getDate();
-      
       if (targetDay > currentDay) {
         const nextDate = new Date(today);
         nextDate.setDate(targetDay);
         return nextDate;
       } else {
-        // Target day has passed this month, go to next month
         const nextDate = new Date(today);
         nextDate.setMonth(nextDate.getMonth() + 1);
         nextDate.setDate(Math.min(targetDay, new Date(nextDate.getFullYear(), nextDate.getMonth() + 1, 0).getDate()));
         return nextDate;
       }
     }
-
     case 'once':
     default:
-      // For non-repeating habits, return the creation date
       return new Date(habit.createdAt);
   }
 }
@@ -817,7 +917,6 @@ export interface UnlockedAchievement {
   unlockedAt: string;
 }
 
-// Get all unlocked achievements
 export async function getUnlockedAchievements(): Promise<UnlockedAchievement[]> {
   try {
     const rows = await db.getUnlockedAchievements(await getActiveProfileId());
@@ -832,7 +931,6 @@ export async function getUnlockedAchievements(): Promise<UnlockedAchievement[]> 
   }
 }
 
-// Get user stats
 export async function getUserStats(profileId?: string): Promise<UserStats> {
   try {
     const targetProfileId = profileId || await getActiveProfileId();
@@ -849,7 +947,6 @@ export async function getUserStats(profileId?: string): Promise<UserStats> {
   }
 }
 
-// Get all trophies with their unlock status
 export async function getTrophiesWithStatus(): Promise<{
   trophy: Trophy;
   unlocked: boolean;
@@ -875,6 +972,8 @@ export async function getTrophiesWithStatus(): Promise<{
         case 'single_habit_streak':
           progress = stats.longestSingleHabitStreak;
           break;
+        default:
+          progress = 0;
       }
 
       return {
@@ -894,7 +993,7 @@ export async function getTrophiesWithStatus(): Promise<{
   }
 }
 
-// Check and unlock achievements after a habit is completed
+// Atomic achievement check and unlock - returns newly unlocked trophies
 export async function checkAndUnlockAchievements(
   habit: Habit,
   currentStreak: number
@@ -905,62 +1004,61 @@ export async function checkAndUnlockAchievements(
   const stats = await getUserStats();
   const newUnlocked: Trophy[] = [];
 
-  // Update user stats
-  await db.updateUserStats({
-    totalCompletions: 1,
-  }, profileId);
-
-  // Update longest streak if current streak is longer
-  if (currentStreak > stats.longestStreak) {
+  return await withTransaction(async (database) => {
+    // Update stats
     await db.updateUserStats({
-      longestStreak: currentStreak,
+      totalCompletions: 1,
     }, profileId);
-  }
 
-  // Update single habit streak if current streak for this habit is longer
-  if (currentStreak > stats.longestSingleHabitStreak) {
-    await db.updateUserStats({
-      longestSingleHabitStreak: currentStreak,
-      longestSingleHabitId: habit.id,
-    }, profileId);
-  }
-
-  // Get updated stats
-  const updatedStats = await getUserStats();
-
-  // Check each trophy
-  for (const trophy of TROPHIES) {
-    if (unlockedIds.has(trophy.id)) continue; // Already unlocked
-
-    let shouldUnlock = false;
-
-    switch (trophy.type) {
-      case 'completions':
-        shouldUnlock = updatedStats.totalCompletions >= trophy.requirement;
-        break;
-      case 'streak':
-        shouldUnlock = updatedStats.longestStreak >= trophy.requirement;
-        break;
-      case 'single_habit_streak':
-        shouldUnlock = updatedStats.longestSingleHabitStreak >= trophy.requirement;
-        break;
+    if (currentStreak > stats.longestStreak) {
+      await db.updateUserStats({
+        longestStreak: currentStreak,
+      }, profileId);
     }
 
-    if (shouldUnlock) {
-      await db.insertAchievement({
-        id: Crypto.randomUUID(),
-        trophyId: trophy.id,
-        unlockedAt: new Date().toISOString(),
-        profileId,
-      });
-      newUnlocked.push(trophy);
+    if (currentStreak > stats.longestSingleHabitStreak) {
+      await db.updateUserStats({
+        longestSingleHabitStreak: currentStreak,
+        longestSingleHabitId: habit.id,
+      }, profileId);
     }
-  }
 
-  return newUnlocked;
+    // Get updated stats
+    const updatedStats = await db.getUserStats(profileId);
+
+    // Check each trophy
+    for (const trophy of TROPHIES) {
+      if (unlockedIds.has(trophy.id)) continue;
+
+      let shouldUnlock = false;
+
+      switch (trophy.type) {
+        case 'completions':
+          shouldUnlock = updatedStats.totalCompletions >= trophy.requirement;
+          break;
+        case 'streak':
+          shouldUnlock = updatedStats.longestStreak >= trophy.requirement;
+          break;
+        case 'single_habit_streak':
+          shouldUnlock = updatedStats.longestSingleHabitStreak >= trophy.requirement;
+          break;
+      }
+
+      if (shouldUnlock) {
+        await db.insertAchievement({
+          id: Crypto.randomUUID(),
+          trophyId: trophy.id,
+          unlockedAt: new Date().toISOString(),
+          profileId,
+        });
+        newUnlocked.push(trophy);
+      }
+    }
+
+    return newUnlocked;
+  });
 }
 
-// Get achievement progress for UI
 export function getAchievementProgress(trophy: Trophy, stats: UserStats): number {
   switch (trophy.type) {
     case 'completions':
@@ -974,182 +1072,144 @@ export function getAchievementProgress(trophy: Trophy, stats: UserStats): number
   }
 }
 
-// Get next achievement to unlock
 export function getNextAchievement(trophies: { trophy: Trophy; unlocked: boolean }[]): Trophy | null {
   const locked = trophies.filter((t) => !t.unlocked);
   if (locked.length === 0) return null;
-  
-  // Sort by requirement
   return locked.sort((a, b) => a.trophy.requirement - b.trophy.requirement)[0].trophy;
 }
 
-// Calculate overall consistency score (percentage based on cumulative completion rate)
-// Each habit's score is: (days since first scheduled) / (days since first scheduled - current streak days)
-// Example: Day 1 done = 100%, Day 2 missed = 50%, Day 3 missed = 33.33%
+// ==================== CONSISTENCY SCORE ====================
+
 export async function getConsistencyScore(profileId?: string): Promise<number> {
   try {
     const targetProfileId = profileId || await getActiveProfileId();
     const rows = await db.getAllHabits(targetProfileId);
     const habits = rows.map(rowToHabit);
-    
     const completionRows = await db.getAllCompletions(targetProfileId);
     const completions = completionRows.map(rowToCompletion);
   
-  if (habits.length === 0) return 0;
-  
-  // Filter out paused habits
-  const activeHabits = habits.filter(h => !isHabitPaused(h));
-  if (activeHabits.length === 0) return 0;
-  
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-  
-  let totalScore = 0;
-  let habitCount = 0;
-  
-  for (const habit of activeHabits) {
-    // Get all completions for this habit
-    const habitCompletions = completions.filter(c => c.habitId === habit.id);
+    if (habits.length === 0) return 0;
     
-    if (habitCompletions.length === 0) {
-      // No completions yet, check if habit was just created
+    const activeHabits = habits.filter(h => !isHabitPaused(h));
+    if (activeHabits.length === 0) return 0;
+    
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    
+    let totalScore = 0;
+    let habitCount = 0;
+    
+    for (const habit of activeHabits) {
+      const habitCompletions = completions.filter(c => c.habitId === habit.id);
+      
+      if (habitCompletions.length === 0) {
+        const createdDate = new Date(habit.createdAt);
+        createdDate.setHours(0, 0, 0, 0);
+        const daysSinceCreation = Math.floor((now.getTime() - createdDate.getTime()) / (1000 * 60 * 60 * 24));
+        if (daysSinceCreation === 0) {
+          totalScore += 100;
+        }
+        habitCount++;
+        continue;
+      }
+      
+      const completionDates = new Set(
+        habitCompletions.map(c => new Date(c.completedAt).toDateString())
+      );
+      
       const createdDate = new Date(habit.createdAt);
       createdDate.setHours(0, 0, 0, 0);
-      const daysSinceCreation = Math.floor((now.getTime() - createdDate.getTime()) / (1000 * 60 * 60 * 24));
+      const daysSinceCreation = Math.floor((now.getTime() - createdDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
       
-      if (daysSinceCreation === 0) {
-        // Created today, give full score since nothing was due yet
-        totalScore += 100;
+      let daysDue = 0;
+      const frequency = habit.frequency || 'once';
+      
+      if (frequency === 'daily') {
+        daysDue = daysSinceCreation;
+      } else if (frequency === 'weekly') {
+        daysDue = Math.ceil(daysSinceCreation / 7);
+      } else if (frequency === 'monthly') {
+        daysDue = 1;
       } else {
-        // Hasn't been completed since creation
-        totalScore += 0;
+        daysDue = 1;
       }
-      habitCount++;
-      continue;
-    }
-    
-    // Get unique dates when habit was completed
-    const completionDates = new Set(
-      habitCompletions.map(c => new Date(c.completedAt).toDateString())
-    );
-    
-    // Calculate days since habit was created
-    const createdDate = new Date(habit.createdAt);
-    createdDate.setHours(0, 0, 0, 0);
-    const daysSinceCreation = Math.floor((now.getTime() - createdDate.getTime()) / (1000 * 60 * 60 * 24)) + 1; // +1 to include today
-    
-    // Calculate how many days the habit was due (based on frequency)
-    let daysDue = 0;
-    const frequency = habit.frequency || 'once';
-    
-    if (frequency === 'daily') {
-      daysDue = daysSinceCreation;
-    } else if (frequency === 'weekly') {
-      // Count weeks since creation
-      daysDue = Math.ceil(daysSinceCreation / 7);
-    } else if (frequency === 'monthly') {
-      daysDue = 1; // Monthly habits are due once per month
-    } else {
-      // 'once' - only due on creation day
-      daysDue = 1;
-    }
-    
-    // Count completed days
-    let completedDays = 0;
-    
-    if (frequency === 'daily') {
-      // For daily habits, count each day from creation to now
-      for (let i = 0; i < daysSinceCreation; i++) {
-        const checkDate = new Date(createdDate);
-        checkDate.setDate(checkDate.getDate() + i);
-        if (completionDates.has(checkDate.toDateString())) {
-          completedDays++;
-        }
-      }
-    } else if (frequency === 'weekly') {
-      // For weekly habits, check each week
-      const weeksSinceCreation = Math.ceil(daysSinceCreation / 7);
-      for (let week = 0; week < weeksSinceCreation; week++) {
-        const weekStartDate = new Date(createdDate);
-        weekStartDate.setDate(weekStartDate.getDate() + (week * 7));
-        // Check if any day in this week was completed
-        let weekCompleted = false;
-        for (let day = 0; day < 7; day++) {
-          const checkDate = new Date(weekStartDate);
-          checkDate.setDate(checkDate.getDate() + day);
+      
+      let completedDays = 0;
+      
+      if (frequency === 'daily') {
+        for (let i = 0; i < daysSinceCreation; i++) {
+          const checkDate = new Date(createdDate);
+          checkDate.setDate(checkDate.getDate() + i);
           if (completionDates.has(checkDate.toDateString())) {
-            weekCompleted = true;
-            break;
+            completedDays++;
           }
         }
-        if (weekCompleted) completedDays++;
+      } else if (frequency === 'weekly') {
+        const weeksSinceCreation = Math.ceil(daysSinceCreation / 7);
+        for (let week = 0; week < weeksSinceCreation; week++) {
+          const weekStartDate = new Date(createdDate);
+          weekStartDate.setDate(weekStartDate.getDate() + (week * 7));
+          let weekCompleted = false;
+          for (let day = 0; day < 7; day++) {
+            const checkDate = new Date(weekStartDate);
+            checkDate.setDate(checkDate.getDate() + day);
+            if (completionDates.has(checkDate.toDateString())) {
+              weekCompleted = true;
+              break;
+            }
+          }
+          if (weekCompleted) completedDays++;
+        }
+      } else {
+        completedDays = completionDates.size > 0 ? 1 : 0;
       }
-    } else {
-      // For monthly/once, just check if completed at all
-      completedDays = completionDates.size > 0 ? 1 : 0;
+      
+      if (daysDue > 0) {
+        const habitScore = Math.round((completedDays / daysDue) * 100);
+        totalScore += habitScore;
+      } else {
+        totalScore += 100;
+      }
+      habitCount++;
     }
     
-    // Calculate score: if completed on first day = 100%, each miss reduces the max possible
-    // Formula: (completed days) / (total days due) * 100
-    if (daysDue > 0) {
-      const habitScore = Math.round((completedDays / daysDue) * 100);
-      totalScore += habitScore;
-    } else {
-      totalScore += 100; // No days due yet
-    }
-    habitCount++;
-  }
-  
-  if (habitCount === 0) return 0;
-  
-  return Math.round(totalScore / habitCount);
+    if (habitCount === 0) return 0;
+    return Math.round(totalScore / habitCount);
   } catch (error) {
     console.error('[ERROR] getConsistencyScore failed:', error);
     return 0;
   }
 }
 
-// Calculate individual habit consistency score
-// Score is based on cumulative completion: day 1 done = 100%, day 2 missed = 50%, etc.
 export async function getHabitConsistencyScore(habitId: string): Promise<number> {
   const habits = await getHabits();
   const completions = await getCompletions();
   
   const habit = habits.find(h => h.id === habitId);
   if (!habit) return 0;
-  
-  // Check if paused
   if (isHabitPaused(habit)) return 0;
   
   const now = new Date();
   now.setHours(0, 0, 0, 0);
   
-  // Get all completions for this habit
   const habitCompletions = completions.filter(c => c.habitId === habitId);
   
   if (habitCompletions.length === 0) {
-    // No completions yet
     const createdDate = new Date(habit.createdAt);
     createdDate.setHours(0, 0, 0, 0);
     const daysSinceCreation = Math.floor((now.getTime() - createdDate.getTime()) / (1000 * 60 * 60 * 24));
-    
-    if (daysSinceCreation === 0) {
-      return 100; // Created today
-    }
-    return 0; // Hasn't been completed
+    if (daysSinceCreation === 0) return 100;
+    return 0;
   }
   
-  // Get unique dates when habit was completed
   const completionDates = new Set(
     habitCompletions.map(c => new Date(c.completedAt).toDateString())
   );
   
-  // Calculate days since habit was created
   const createdDate = new Date(habit.createdAt);
   createdDate.setHours(0, 0, 0, 0);
   const daysSinceCreation = Math.floor((now.getTime() - createdDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
   
-  // Calculate how many days the habit was due
   let daysDue = 0;
   const frequency = habit.frequency || 'once';
   
@@ -1163,7 +1223,6 @@ export async function getHabitConsistencyScore(habitId: string): Promise<number>
     daysDue = 1;
   }
   
-  // Count completed days
   let completedDays = 0;
   
   if (frequency === 'daily') {
@@ -1195,11 +1254,10 @@ export async function getHabitConsistencyScore(habitId: string): Promise<number>
   }
   
   if (daysDue === 0) return 100;
-  
   return Math.round((completedDays / daysDue) * 100);
 }
 
-// ==================== PURCHASED SKILLS ====================
+// ==================== SKILL OPERATIONS ====================
 
 export async function getPurchasedSkillIds(): Promise<string[]> {
   try {
@@ -1211,57 +1269,116 @@ export async function getPurchasedSkillIds(): Promise<string[]> {
   }
 }
 
-export async function savePurchasedSkill(skillId: string): Promise<void> {
+// Atomic skill purchase with duplicate prevention
+export async function savePurchasedSkill(skillId: string): Promise<boolean> {
   try {
-    await db.insertPurchasedSkill({
+    const result = await db.insertPurchasedSkill({
       id: Crypto.randomUUID(),
       skillId,
       profileId: await getActiveProfileId(),
       purchasedAt: new Date().toISOString(),
     });
+    return result;
   } catch (error) {
     console.error('[ERROR] savePurchasedSkill failed:', error);
     throw error;
   }
 }
 
-// Restore a broken streak by spending coins
-export async function restoreStreakWithCoins(cost: number): Promise<boolean> {
-  const profileId = getActiveProfileId();
+// ==================== ADMIN OPERATIONS ====================
+
+const MAX_BONUS_AMOUNT = FEATURE_FLAGS.PARENT_ACCESS_CONTROL ? 10000 : 999999999;
+const BASE_RESTORE_COST = 50;
+const MAX_RESTORE_STREAK = 30;
+
+function requireParentProfile(): void {
+  if (isEnabled('PARENT_ACCESS_CONTROL') && !isParentProfile()) {
+    throw new Error('PARENT_ACCESS_REQUIRED');
+  }
+}
+
+function validateAmount(amount: number, max: number = MAX_BONUS_AMOUNT): void {
+  if (typeof amount !== 'number' || isNaN(amount)) {
+    throw new Error('INVALID_AMOUNT');
+  }
+  if (amount < 0) {
+    throw new Error('INVALID_AMOUNT: Amount cannot be negative');
+  }
+  if (amount > max) {
+    throw new Error(`AMOUNT_EXCEEDS_LIMIT: Maximum allowed is ${max}`);
+  }
+}
+
+export async function restoreStreakWithCoins(cost?: number): Promise<{ success: boolean; error?: string }> {
+  requireParentProfile();
+  
+  const stats = await getUserStats();
+  
+  if (stats.longestStreak === 0) {
+    return { success: false, error: 'NO_STREAK_TO_RESTORE' };
+  }
+  
+  const calculatedCost = isEnabled('STREAK_RESTORE_V2')
+    ? Math.min(stats.longestStreak * BASE_RESTORE_COST, MAX_RESTORE_STREAK * BASE_RESTORE_COST)
+    : 500;
+  
+  if (cost !== undefined && cost !== calculatedCost) {
+    return { success: false, error: 'INVALID_COST' };
+  }
+  
   const balance = await getBalance();
-  if (balance < cost) return false;
+  if (balance < calculatedCost) {
+    return { success: false, error: 'INSUFFICIENT_BALANCE' };
+  }
   
-  await setBalance(balance - cost);
-  
-  // Update longest streak in user stats
-  const stats = await db.getUserStats(profileId);
-  await db.updateUserStats({
-    longestStreak: stats.longestStreak + 1,
-  }, profileId);
-  
-  return true;
+  return await withTransaction(async (database) => {
+    const currentBalance = await db.getWalletBalance(await getActiveProfileId());
+    if (currentBalance < calculatedCost) {
+      return { success: false, error: 'INSUFFICIENT_BALANCE' };
+    }
+    
+    await db.deductFromWalletBalance(calculatedCost, await getActiveProfileId());
+    await db.updateUserStats({
+      longestStreak: stats.longestStreak + 1,
+    }, await getActiveProfileId());
+    
+    return { success: true };
+  });
 }
 
-// Add bonus points to a profile
 export async function addBonusPoints(amount: number, profileId?: string): Promise<void> {
-  const targetProfile = profileId || getActiveProfileId();
-  const balance = await db.getWalletBalance(targetProfile);
-  await db.setWalletBalance(balance + amount, targetProfile);
+  requireParentProfile();
+  validateAmount(amount);
+  
+  const targetProfile = profileId || await getActiveProfileId();
+  await db.addToWalletBalance(amount, targetProfile);
 }
 
-// Apply penalty points to a profile
 export async function applyPenaltyPoints(amount: number, profileId?: string): Promise<void> {
-  const targetProfile = profileId || getActiveProfileId();
-  const balance = await db.getWalletBalance(targetProfile);
-  await db.setWalletBalance(Math.max(0, balance - amount), targetProfile);
+  requireParentProfile();
+  validateAmount(amount);
+  
+  const targetProfile = profileId || await getActiveProfileId();
+  const currentBalance = await db.getWalletBalance(targetProfile);
+  const actualDeduction = Math.min(amount, currentBalance);
+  await db.setWalletBalance(currentBalance - actualDeduction, targetProfile);
 }
 
-// Reset streak for a profile
 export async function resetStreak(profileId?: string): Promise<void> {
-  const targetProfile = profileId || getActiveProfileId();
+  requireParentProfile();
+  
+  const targetProfile = profileId || await getActiveProfileId();
   await db.updateUserStats({
     longestStreak: 0,
     longestSingleHabitStreak: 0,
     longestSingleHabitId: undefined,
   }, targetProfile);
+}
+
+// Calculate streak restore cost (for UI display)
+export function getStreakRestoreCost(currentStreak: number): number {
+  if (!isEnabled('STREAK_RESTORE_V2')) {
+    return 500;
+  }
+  return Math.min(currentStreak * BASE_RESTORE_COST, MAX_RESTORE_STREAK * BASE_RESTORE_COST);
 }

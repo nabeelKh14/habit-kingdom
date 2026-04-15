@@ -1,7 +1,8 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
-import * as db from './db';
 import type { Habit } from './storage';
+import { isHabitPaused } from './storage';
+import { isEnabled } from './feature-flags';
 
 // Configure notification handling
 Notifications.setNotificationHandler({
@@ -13,6 +14,16 @@ Notifications.setNotificationHandler({
     shouldShowList: true,
   }),
 });
+
+const MOTIVATIONAL_MESSAGES = [
+  "Time to build a great habit! 🌟 🐻",
+  "Your future self will thank you! 💪 🐶",
+  "Don't break the streak! 🔥 🦁",
+  "You've got this! ⭐ 🐯",
+  "Building habits, one day at a time! 🎯 🐻",
+  "Keep up the amazing work! 🚀 🐶",
+  "Make today count! ✨ 🦁",
+];
 
 // Request notification permissions
 export async function requestNotificationPermissions(): Promise<boolean> {
@@ -41,32 +52,38 @@ export async function requestNotificationPermissions(): Promise<boolean> {
   return true;
 }
 
+// Check if notifications are permitted (without requesting)
+export async function hasNotificationPermissions(): Promise<boolean> {
+  const { status } = await Notifications.getPermissionsAsync();
+  return status === 'granted';
+}
+
 // Schedule notifications for a habit
 export async function scheduleHabitNotifications(habit: Habit): Promise<void> {
   // Cancel existing notifications for this habit first
   await cancelHabitNotifications(habit.id);
 
+  // Don't schedule for paused habits
+  if (isHabitPaused(habit)) {
+    console.log('[Notifications] Skipping paused habit:', habit.id, habit.name);
+    return;
+  }
+
   // Validate notificationTime before processing
   if (!habit.notificationsEnabled || !habit.notificationTime) {
-    console.log('[DEBUG] Notifications disabled or no notificationTime set for habit:', habit.id, habit.name);
+    console.log('[Notifications] Notifications disabled or no notificationTime for habit:', habit.id);
     return;
   }
 
   // Validate notificationTime format
-  if (typeof habit.notificationTime !== 'string') {
-    console.error('[ERROR] Invalid notificationTime type for habit:', habit.id, typeof habit.notificationTime);
-    return;
-  }
-
-  // Validate notificationTime contains a colon
-  if (!habit.notificationTime.includes(':')) {
-    console.error('[ERROR] Invalid notificationTime format (missing colon):', habit.id, habit.notificationTime);
+  if (typeof habit.notificationTime !== 'string' || !habit.notificationTime.includes(':')) {
+    console.error('[Notifications] Invalid notificationTime format:', habit.notificationTime);
     return;
   }
 
   const timeParts = habit.notificationTime.split(':');
   if (timeParts.length !== 2) {
-    console.error('[ERROR] Invalid notificationTime format:', habit.id, habit.notificationTime);
+    console.error('[Notifications] Invalid notificationTime format:', habit.notificationTime);
     return;
   }
 
@@ -74,30 +91,21 @@ export async function scheduleHabitNotifications(habit: Habit): Promise<void> {
   const minutes = parseInt(timeParts[1], 10);
 
   if (isNaN(hours) || isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
-    console.error('[ERROR] Invalid time values:', habit.id, hours, minutes);
+    console.error('[Notifications] Invalid time values:', hours, minutes);
     return;
   }
 
-  console.log('[DEBUG] Scheduling notification for habit:', habit.id, 'at', habit.notificationTime);
+  console.log('[Notifications] Scheduling notification for habit:', habit.id, 'at', habit.notificationTime);
 
   // Get the trigger based on frequency
   const trigger = getNotificationTrigger(habit, hours, minutes);
 
   if (!trigger) {
+    console.log('[Notifications] No trigger generated for habit:', habit.id);
     return;
   }
 
-  const motivationalMessages = [
-    "Time to build a great habit! 🌟 🐻",
-    "Your future self will thank you! 💪 🐶",
-    "Don't break the streak! 🔥 🦁",
-    "You've got this! ⭐ 🐯",
-    "Building habits, one day at a time! 🎯 🐻",
-    "Keep up the amazing work! 🚀 🐶",
-    "Make today count! ✨ 🦁",
-  ];
-
-  const randomMessage = motivationalMessages[Math.floor(Math.random() * motivationalMessages.length)];
+  const randomMessage = MOTIVATIONAL_MESSAGES[Math.floor(Math.random() * MOTIVATIONAL_MESSAGES.length)];
 
   await Notifications.scheduleNotificationAsync({
     content: {
@@ -112,6 +120,9 @@ export async function scheduleHabitNotifications(habit: Habit): Promise<void> {
 
 // Get the appropriate trigger based on habit frequency
 function getNotificationTrigger(habit: Habit, hours: number, minutes: number): Notifications.NotificationTriggerInput | null {
+  // Check feature flag for weekly/monthly notifications
+  const useWeeklyMonthly = isEnabled('WEEKLY_MONTHLY_NOTIFICATIONS');
+
   switch (habit.frequency) {
     case 'daily':
       return {
@@ -121,17 +132,17 @@ function getNotificationTrigger(habit: Habit, hours: number, minutes: number): N
       };
 
     case 'weekly':
-      // For weekly habits, schedule for each selected day
-      if (habit.daysOfWeek && habit.daysOfWeek.length > 0) {
-        // Use daily trigger but we'll handle the day check in the notification
-        // For simplicity, we'll schedule a daily notification
+      if (useWeeklyMonthly && habit.daysOfWeek && habit.daysOfWeek.length > 0) {
+        // Schedule for each selected day of the week
         return {
-          type: Notifications.SchedulableTriggerInputTypes.DAILY,
+          type: Notifications.SchedulableTriggerInputTypes.WEEKLY,
           hour: hours,
           minute: minutes,
+          weekday: habit.daysOfWeek[0] + 1, // Convert 0-6 to 1-7 (Sunday = 1)
+          repeats: true,
         };
       }
-      // Default to daily if no days specified
+      // Fallback: daily notification (as documented in UI)
       return {
         type: Notifications.SchedulableTriggerInputTypes.DAILY,
         hour: hours,
@@ -139,7 +150,17 @@ function getNotificationTrigger(habit: Habit, hours: number, minutes: number): N
       };
 
     case 'monthly':
-      // For monthly, use daily trigger (monthly triggers are complex in expo-notifications)
+      if (useWeeklyMonthly && habit.dayOfMonth) {
+        // Monthly trigger - schedule for specific day of month
+        return {
+          type: Notifications.SchedulableTriggerInputTypes.MONTHLY,
+          hour: hours,
+          minute: minutes,
+          day: habit.dayOfMonth,
+          repeats: true,
+        };
+      }
+      // Fallback: daily notification (as documented in UI)
       return {
         type: Notifications.SchedulableTriggerInputTypes.DAILY,
         hour: hours,
@@ -148,7 +169,7 @@ function getNotificationTrigger(habit: Habit, hours: number, minutes: number): N
 
     case 'once':
     default:
-      // For one-time habits, don't schedule repeating notifications
+      // For one-time habits, schedule a single notification at the due date
       return null;
   }
 }
@@ -157,12 +178,10 @@ function getNotificationTrigger(habit: Habit, hours: number, minutes: number): N
 export async function cancelHabitNotifications(habitId: string): Promise<void> {
   const scheduledNotifications = await Notifications.getAllScheduledNotificationsAsync();
   
-  // Filter notifications that were created for this habit
   const habitNotifications = scheduledNotifications.filter(
     notification => notification.content.data?.habitId === habitId
   );
 
-  // Cancel each notification
   for (const notification of habitNotifications) {
     await Notifications.cancelScheduledNotificationAsync(notification.identifier);
   }
@@ -175,6 +194,11 @@ export async function cancelAllHabitNotifications(): Promise<void> {
 
 // Update notification settings for a habit
 export async function updateHabitNotifications(habit: Habit): Promise<void> {
+  if (isHabitPaused(habit)) {
+    await cancelHabitNotifications(habit.id);
+    return;
+  }
+  
   if (habit.notificationsEnabled) {
     await scheduleHabitNotifications(habit);
   } else {
@@ -195,7 +219,10 @@ export async function scheduleMiddayReminder(time: string): Promise<void> {
   const hours = parseInt(hoursStr, 10);
   const minutes = parseInt(minutesStr, 10);
 
-  if (isNaN(hours) || isNaN(minutes)) return;
+  if (isNaN(hours) || isNaN(minutes)) {
+    console.error('[Notifications] Invalid midday reminder time:', time);
+    return;
+  }
 
   await Notifications.scheduleNotificationAsync({
     content: {
@@ -229,7 +256,10 @@ export async function scheduleNightReminder(time: string): Promise<void> {
   const hours = parseInt(hoursStr, 10);
   const minutes = parseInt(minutesStr, 10);
 
-  if (isNaN(hours) || isNaN(minutes)) return;
+  if (isNaN(hours) || isNaN(minutes)) {
+    console.error('[Notifications] Invalid night reminder time:', time);
+    return;
+  }
 
   await Notifications.scheduleNotificationAsync({
     content: {

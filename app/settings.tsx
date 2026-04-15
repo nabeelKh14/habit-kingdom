@@ -11,6 +11,7 @@ import {
   Alert,
   Image,
   TextInput,
+  Linking,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -181,7 +182,14 @@ export default function SettingsScreen() {
     if (value) {
       const hasPermission = await requestNotificationPermissions();
       if (!hasPermission) {
-        // Permission denied, don't enable
+        Alert.alert(
+          "Notifications Disabled",
+          "Please enable notifications in Settings to receive midday reminders.",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Open Settings", onPress: () => Linking.openSettings() }
+          ]
+        );
         return;
       }
     }
@@ -193,6 +201,14 @@ export default function SettingsScreen() {
     if (value) {
       const hasPermission = await requestNotificationPermissions();
       if (!hasPermission) {
+        Alert.alert(
+          "Notifications Disabled",
+          "Please enable notifications in Settings to receive night reminders.",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Open Settings", onPress: () => Linking.openSettings() }
+          ]
+        );
         return;
       }
     }
@@ -409,7 +425,7 @@ export default function SettingsScreen() {
         {/* Admin Values Section */}
         <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Admin Values</Text>
         <Text style={styles.sectionDescription}>
-          Configure default values for bonus and penalty buttons.
+          Configure default values for bonus and penalty buttons. Maximum is 10,000 points.
         </Text>
 
         <View style={styles.settingCard}>
@@ -429,9 +445,14 @@ export default function SettingsScreen() {
               keyboardType="numeric"
               onChangeText={(val) => {
                 const num = parseInt(val || "0", 10);
-                if (num >= 0) {
-                  setSettings(s => ({ ...s, bonusAmount: num }));
+                if (isNaN(num) || num < 0) {
+                  return;
                 }
+                if (num > 10000) {
+                  Alert.alert("Maximum Exceeded", "Bonus amount cannot exceed 10,000 points.");
+                  return;
+                }
+                setSettings(s => ({ ...s, bonusAmount: num }));
               }}
               onBlur={() => saveReminderSettings(settings)}
             />
@@ -453,9 +474,14 @@ export default function SettingsScreen() {
               keyboardType="numeric"
               onChangeText={(val) => {
                 const num = parseInt(val || "0", 10);
-                if (num >= 0) {
-                  setSettings(s => ({ ...s, penaltyAmount: num }));
+                if (isNaN(num) || num < 0) {
+                  return;
                 }
+                if (num > 10000) {
+                  Alert.alert("Maximum Exceeded", "Penalty amount cannot exceed 10,000 points.");
+                  return;
+                }
+                setSettings(s => ({ ...s, penaltyAmount: num }));
               }}
               onBlur={() => saveReminderSettings(settings)}
             />

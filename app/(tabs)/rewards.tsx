@@ -38,6 +38,7 @@ import {
   addBonusPoints,
   applyPenaltyPoints,
   resetStreak,
+  isParentProfile,
 } from "../../lib/storage";
 
 function RewardCard({
@@ -248,6 +249,7 @@ export default function RewardsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [showCelebration, setShowCelebration] = useState(false);
   const [settings, setSettings] = useState({ bonusAmount: 10, penaltyAmount: 10 });
+  const [isParent, setIsParent] = useState(false);
   const celebrationScale = useSharedValue(0);
 
   const loadData = useCallback(async () => {
@@ -267,6 +269,7 @@ export default function RewardsScreen() {
         bonusAmount: reminderSettings.bonusAmount,
         penaltyAmount: reminderSettings.penaltyAmount,
       });
+      setIsParent(isParentProfile());
     } catch (error) {
       console.error('Error loading rewards data:', error);
     } finally {
@@ -329,6 +332,10 @@ export default function RewardsScreen() {
   };
 
   const handleBonus = () => {
+    if (!isParent) {
+      Alert.alert("Access Denied", "Only parent profiles can give bonus points.");
+      return;
+    }
     Alert.prompt(
       "Give Bonus Points",
       "Enter amount of points to add:",
@@ -338,10 +345,20 @@ export default function RewardsScreen() {
           text: "Add",
           onPress: async (val) => {
             const num = parseInt(val || "0", 10);
-            if (num > 0) {
+            if (isNaN(num) || num <= 0) {
+              Alert.alert("Invalid Amount", "Please enter a positive number.");
+              return;
+            }
+            if (num > 10000) {
+              Alert.alert("Amount Too High", "Maximum bonus is 10,000 points.");
+              return;
+            }
+            try {
               await addBonusPoints(num);
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
               loadData();
+            } catch (error: any) {
+              Alert.alert("Error", error.message || "Failed to add bonus points.");
             }
           }
         }
@@ -353,6 +370,10 @@ export default function RewardsScreen() {
   };
 
   const handlePenalty = () => {
+    if (!isParent) {
+      Alert.alert("Access Denied", "Only parent profiles can deduct points.");
+      return;
+    }
     Alert.prompt(
       "Deduct Points",
       "Enter amount of points to deduct:",
@@ -363,10 +384,20 @@ export default function RewardsScreen() {
           style: "destructive",
           onPress: async (val) => {
             const num = parseInt(val || "0", 10);
-            if (num > 0) {
+            if (isNaN(num) || num <= 0) {
+              Alert.alert("Invalid Amount", "Please enter a positive number.");
+              return;
+            }
+            if (num > 10000) {
+              Alert.alert("Amount Too High", "Maximum penalty is 10,000 points.");
+              return;
+            }
+            try {
               await applyPenaltyPoints(num);
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
               loadData();
+            } catch (error: any) {
+              Alert.alert("Error", error.message || "Failed to apply penalty.");
             }
           }
         }
@@ -378,6 +409,10 @@ export default function RewardsScreen() {
   };
 
   const handleResetStreak = () => {
+    if (!isParent) {
+      Alert.alert("Access Denied", "Only parent profiles can reset streaks.");
+      return;
+    }
     Alert.alert(
       "Reset Streak",
       "Are you sure you want to reset the streak? This cannot be undone.",
@@ -387,9 +422,13 @@ export default function RewardsScreen() {
           text: "Reset",
           style: "destructive",
           onPress: async () => {
-            await resetStreak();
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-            loadData();
+            try {
+              await resetStreak();
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+              loadData();
+            } catch (error: any) {
+              Alert.alert("Error", error.message || "Failed to reset streak.");
+            }
           }
         }
       ]
@@ -440,20 +479,22 @@ export default function RewardsScreen() {
 )}
       </View>
 
-      <View style={styles.adminActions}>
-        <Pressable onPress={handleBonus} style={[styles.adminButton, { backgroundColor: Colors.success + "15" }]}>
-          <Ionicons name="add-circle" size={18} color={Colors.success} />
-          <Text style={[styles.adminButtonText, { color: Colors.success }]}>Bonus</Text>
-        </Pressable>
-        <Pressable onPress={handlePenalty} style={[styles.adminButton, { backgroundColor: Colors.error + "15" }]}>
-          <Ionicons name="remove-circle" size={18} color={Colors.error} />
-          <Text style={[styles.adminButtonText, { color: Colors.error }]}>Penalty</Text>
-        </Pressable>
-        <Pressable onPress={handleResetStreak} style={[styles.adminButton, { backgroundColor: Colors.warning + "15" }]}>
-          <Ionicons name="refresh-circle" size={18} color={Colors.warning} />
-          <Text style={[styles.adminButtonText, { color: Colors.warning }]}>Reset Streak</Text>
-        </Pressable>
-      </View>
+      {isParent && (
+        <View style={styles.adminActions}>
+          <Pressable onPress={handleBonus} style={[styles.adminButton, { backgroundColor: Colors.success + "15" }]}>
+            <Ionicons name="add-circle" size={18} color={Colors.success} />
+            <Text style={[styles.adminButtonText, { color: Colors.success }]}>Bonus</Text>
+          </Pressable>
+          <Pressable onPress={handlePenalty} style={[styles.adminButton, { backgroundColor: Colors.error + "15" }]}>
+            <Ionicons name="remove-circle" size={18} color={Colors.error} />
+            <Text style={[styles.adminButtonText, { color: Colors.error }]}>Penalty</Text>
+          </Pressable>
+          <Pressable onPress={handleResetStreak} style={[styles.adminButton, { backgroundColor: Colors.warning + "15" }]}>
+            <Ionicons name="refresh-circle" size={18} color={Colors.warning} />
+            <Text style={[styles.adminButtonText, { color: Colors.warning }]}>Reset Streak</Text>
+          </Pressable>
+        </View>
+      )}
 
       {/* Tab Selector */}
       <View style={styles.tabContainer}>
