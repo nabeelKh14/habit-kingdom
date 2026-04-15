@@ -1,4 +1,4 @@
-export const HABIT_ICONS = [
+export const HABIT_ICONS: { name: string; label: string; library?: "feather" | "ionicons" }[] = [
   { name: "book-open", label: "Reading" },
   { name: "edit-3", label: "Writing" },
   { name: "sunrise", label: "Wake Up" },
@@ -15,6 +15,11 @@ export const HABIT_ICONS = [
   { name: "zap", label: "Energy" },
   { name: "feather", label: "Light" },
   { name: "home", label: "Chore" },
+  { name: "gamepad", label: "Gaming" },
+  // Physical Activity Icons
+  { name: "fitness-outline", label: "Gym", library: "ionicons" },
+  { name: "body-outline", label: "Yoga", library: "ionicons" },
+  { name: "water-outline", label: "Swimming", library: "ionicons" },
 ];
 
 export const REWARD_ICONS = [

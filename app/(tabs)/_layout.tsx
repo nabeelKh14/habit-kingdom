@@ -2,12 +2,10 @@ import { isLiquidGlassAvailable } from "expo-glass-effect";
 import { Tabs } from "expo-router";
 import { NativeTabs, Icon, Label } from "expo-router/unstable-native-tabs";
 import { BlurView } from "expo-blur";
-import { SymbolView } from "expo-symbols";
 import { Platform, StyleSheet, useColorScheme, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import React from "react";
-import Colors from "@/constants/colors";
+import Colors from "../../constants/colors";
 
 function NativeTabLayout() {
   return (
@@ -16,9 +14,9 @@ function NativeTabLayout() {
         <Icon sf={{ default: "checkmark.circle", selected: "checkmark.circle.fill" }} />
         <Label>Habits</Label>
       </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="wallet">
+      <NativeTabs.Trigger name="kingdom">
         <Icon sf={{ default: "wallet.pass", selected: "wallet.pass.fill" }} />
-        <Label>Wallet</Label>
+        <Label>Kingdom</Label>
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="rewards">
         <Icon sf={{ default: "gift", selected: "gift.fill" }} />
@@ -34,7 +32,6 @@ function NativeTabLayout() {
 
 function ClassicTabLayout() {
   const colorScheme = useColorScheme();
-  const safeAreaInsets = useSafeAreaInsets();
   const isDark = colorScheme === "dark";
   const isWeb = Platform.OS === "web";
   const isIOS = Platform.OS === "ios";
@@ -84,9 +81,9 @@ function ClassicTabLayout() {
         }}
       />
       <Tabs.Screen
-        name="wallet"
+        name="kingdom"
         options={{
-          title: "Wallet",
+          title: "Kingdom",
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="wallet-outline" size={size} color={color} />
           ),

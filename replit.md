@@ -1,4 +1,4 @@
-# KidCoins - Habit Tracker for Kids
+# KidCoins - Habit Kingdom for Kids
 
 ## Overview
 A mobile habit tracker app for parents to manage their kids' habits with a coin-based reward system. Kids earn coins by completing daily habits and can redeem them for rewards.

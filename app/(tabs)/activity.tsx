@@ -6,18 +6,18 @@ import {
   SectionList,
   Platform,
   RefreshControl,
+  Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "expo-router";
 import Animated, { FadeIn } from "react-native-reanimated";
-import Colors from "@/constants/colors";
+import Colors from "../../constants/colors";
 import {
-  getCompletions,
-  getRedemptions,
-  type HabitCompletion,
-  type RewardRedemption,
-} from "@/lib/storage";
+  getAllProfileCompletions,
+  getAllProfileRedemptions,
+  getProfiles,
+} from "../../lib/storage";
 
 type ActivityItem = {
   id: string;
@@ -25,6 +25,7 @@ type ActivityItem = {
   name: string;
   amount: number;
   date: string;
+  profileName: string;
 };
 
 type Section = {
@@ -39,10 +40,18 @@ export default function ActivityScreen() {
   const [loading, setLoading] = useState(true);
 
   const loadData = useCallback(async () => {
-    const [completions, redemptions] = await Promise.all([
-      getCompletions(),
-      getRedemptions(),
-    ]);
+    try {
+      const [completions, redemptions, profiles] = await Promise.all([
+        getAllProfileCompletions(),
+        getAllProfileRedemptions(),
+        getProfiles(),
+      ]);
+
+      const getProfileName = (id?: string) => {
+        if (!id) return '';
+        const p = profiles.find(p => p.id === id);
+        return p ? p.name : '';
+      };
 
     const items: ActivityItem[] = [
       ...completions.map((c) => ({
@@ -51,6 +60,7 @@ export default function ActivityScreen() {
         name: c.habitName,
         amount: c.coinReward,
         date: c.completedAt,
+        profileName: getProfileName(c.profileId),
       })),
       ...redemptions.map((r) => ({
         id: r.id,
@@ -58,12 +68,24 @@ export default function ActivityScreen() {
         name: r.rewardName,
         amount: r.cost,
         date: r.redeemedAt,
+        profileName: getProfileName(r.profileId),
       })),
-    ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    ].filter(item => {
+      // Validate date before sorting
+      const date = new Date(item.date);
+      return !isNaN(date.getTime());
+    }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     const grouped: Record<string, ActivityItem[]> = {};
     items.forEach((item) => {
       const date = new Date(item.date);
+      
+      // Skip invalid dates
+      if (isNaN(date.getTime())) {
+        console.warn('Skipping invalid date:', item.date);
+        return;
+      }
+      
       const today = new Date();
       const yesterday = new Date();
       yesterday.setDate(yesterday.getDate() - 1);
@@ -90,7 +112,12 @@ export default function ActivityScreen() {
     );
 
     setSections(sectionsList);
-    setLoading(false);
+    } catch (error) {
+      console.error('Error loading activity data:', error);
+      Alert.alert('Error', 'Failed to load activity data. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useFocusEffect(
@@ -101,12 +128,21 @@ export default function ActivityScreen() {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await loadData();
-    setRefreshing(false);
+    try {
+      await loadData();
+    } catch (error) {
+      console.error('Error refreshing activity:', error);
+      Alert.alert('Error', 'Failed to refresh. Please try again.');
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const formatTime = (dateStr: string) => {
     const date = new Date(dateStr);
+    if (isNaN(date.getTime())) {
+      return '--:--';
+    }
     return date.toLocaleTimeString("en-US", {
       hour: "numeric",
       minute: "2-digit",
@@ -115,11 +151,6 @@ export default function ActivityScreen() {
   };
 
   const webTopPadding = Platform.OS === "web" ? 67 : 0;
-
-  const allItems = sections.reduce(
-    (sum, s) => sum + s.data.length,
-    0
-  );
 
   return (
     <View style={[styles.container, { paddingTop: insets.top + webTopPadding }]}>
@@ -162,8 +193,8 @@ export default function ActivityScreen() {
                 />
               </View>
               <View style={styles.activityInfo}>
-                <Text style={styles.activityName}>{item.name}</Text>
-                <Text style={styles.activityTime}>{formatTime(item.date)}</Text>
+                <Text style={styles.activityName} numberOfLines={1}>{item.name}</Text>
+                <Text style={styles.activityTime}>{formatTime(item.date)}{item.profileName ? ` • ${item.profileName}` : ''}</Text>
               </View>
               <View style={styles.activityAmountContainer}>
                 <Text
@@ -194,7 +225,9 @@ export default function ActivityScreen() {
         )}
         contentContainerStyle={[
           styles.listContent,
-          Platform.OS === "web" ? { paddingBottom: 34 + 60 } : {},
+          Platform.OS === "web" 
+            ? { paddingBottom: 34 + 60 }
+            : { paddingBottom: 60 },
         ]}
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
@@ -253,6 +286,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 14,
     marginBottom: 6,
+    minHeight: 68,
   },
   activityIcon: {
     width: 40,
@@ -260,15 +294,18 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
+    flexShrink: 0,
   },
   activityInfo: {
     flex: 1,
     marginLeft: 12,
+    minWidth: 0,
   },
   activityName: {
     fontSize: 15,
     fontFamily: "Nunito_600SemiBold",
     color: Colors.text,
+    flexShrink: 1,
   },
   activityTime: {
     fontSize: 12,

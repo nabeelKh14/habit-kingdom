@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   StyleSheet,
   Text,
@@ -8,34 +8,106 @@ import {
   ScrollView,
   Platform,
   KeyboardAvoidingView,
+  Alert,
+  Modal,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather, Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import * as Haptics from "expo-haptics";
-import Colors from "@/constants/colors";
-import { saveReward } from "@/lib/storage";
-import { REWARD_ICONS, REWARD_COLORS } from "@/lib/habitIcons";
+import Colors from "../constants/colors";
+import { saveReward, getRewards, updateReward as updateRewardStorage, type Reward, getProfiles, type Profile } from "../lib/storage";
+import { getActiveProfileId } from "../lib/onboarding-storage";
+import { REWARD_ICONS, REWARD_COLORS } from "../lib/habitIcons";
 
 export default function AddRewardScreen() {
   const insets = useSafeAreaInsets();
+  const params = useLocalSearchParams();
+  const editRewardId = params.id as string | undefined;
+  const isEditMode = !!editRewardId;
+  
   const [name, setName] = useState("");
   const [selectedIcon, setSelectedIcon] = useState(REWARD_ICONS[0].name);
   const [selectedColor, setSelectedColor] = useState(REWARD_COLORS[0]);
-  const [cost, setCost] = useState("10");
+  const [cost, setCost] = useState("50");
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<string>('');
+
+  // Load reward data for edit mode
+  useEffect(() => {
+    loadData();
+  }, [editRewardId]);
+
+  const loadData = async () => {
+    try {
+      const allProfiles = await getProfiles();
+      setProfiles(allProfiles);
+      const currentActiveProfileId = await getActiveProfileId();
+      let initialProfileId = currentActiveProfileId;
+
+      if (isEditMode) {
+        const rewards = await getRewards();
+        const reward = rewards.find(r => r.id === editRewardId);
+        if (reward) {
+          setName(reward.name);
+          setSelectedIcon(reward.icon);
+          setSelectedColor(reward.color);
+          setCost(reward.cost.toString());
+          if (reward.profileId) initialProfileId = reward.profileId;
+        } else {
+          // Reward not found - navigate back and show error
+          Alert.alert('Error', 'Reward not found.');
+          router.back();
+          return;
+        }
+      }
+      setSelectedProfileId(initialProfileId);
+    } catch (error) {
+      console.error('Error loading data for reward:', error);
+      Alert.alert('Error', 'Failed to load data.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSave = async () => {
     if (!name.trim()) return;
     setSaving(true);
-    await saveReward({
-      name: name.trim(),
-      icon: selectedIcon,
-      color: selectedColor,
-      cost: parseInt(cost, 10) || 10,
-    });
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    router.back();
+    try {
+      const finalCost = parseInt(cost, 10) || 50;
+      
+      if (isEditMode) {
+        // Update existing reward
+        await updateRewardStorage({
+          id: editRewardId,
+          name: name.trim(),
+          icon: selectedIcon,
+          color: selectedColor,
+          cost: finalCost,
+          profileId: selectedProfileId,
+        });
+      } else {
+        // Create new reward
+        await saveReward({
+          name: name.trim(),
+          icon: selectedIcon,
+          color: selectedColor,
+          cost: finalCost,
+          profileId: selectedProfileId,
+        });
+      }
+      
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      router.back();
+    } catch (error) {
+      console.error('Error saving reward:', error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setErrorMsg('Failed to save reward. Please try again.');
+      setSaving(false);
+    }
   };
 
   const webTopPadding = Platform.OS === "web" ? 67 : 0;
@@ -44,19 +116,19 @@ export default function AddRewardScreen() {
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-      keyboardVerticalOffset={90}
+      behavior={Platform.OS === "ios" ? "padding" : "padding"}
+      keyboardVerticalOffset={0}
     >
-      <View style={[styles.container, { paddingTop: insets.top + webTopPadding }]}>
+      <View style={[styles.container, { paddingTop: insets.top + webTopPadding, paddingBottom: insets.bottom }]}>
         <View style={styles.header}>
           <Pressable onPress={() => router.back()}>
             <Ionicons name="close" size={26} color={Colors.text} />
           </Pressable>
-          <Text style={styles.headerTitle}>New Reward</Text>
+          <Text style={styles.headerTitle}>{isEditMode ? 'Edit Reward' : 'New Reward'}</Text>
           <Pressable
             onPress={handleSave}
-            disabled={!canSave}
-            style={[styles.saveButton, !canSave && { opacity: 0.4 }]}
+            disabled={!canSave || loading}
+            style={[styles.saveButton, (!canSave || loading) && { opacity: 0.4 }]}
           >
             <Ionicons name="checkmark" size={24} color="#fff" />
           </Pressable>
@@ -68,6 +140,38 @@ export default function AddRewardScreen() {
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
         >
+          <Text style={styles.label}>Profile</Text>
+          <View style={styles.profileSelector}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              {profiles.map(p => (
+                <Pressable
+                  key={p.id}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setSelectedProfileId(p.id);
+                  }}
+                  style={[
+                    styles.profileChip,
+                    selectedProfileId === p.id && {
+                      backgroundColor: Colors.primary,
+                      borderColor: Colors.primary,
+                    }
+                  ]}
+                >
+                  <Ionicons 
+                    name={p.type === 'child' ? 'happy' : 'person'} 
+                    size={16} 
+                    color={selectedProfileId === p.id ? "#fff" : Colors.textSecondary} 
+                  />
+                  <Text style={[
+                    styles.profileChipText,
+                    selectedProfileId === p.id && { color: "#fff" }
+                  ]}>{p.name}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+
           <Text style={styles.label}>Reward Name</Text>
           <TextInput
             style={styles.input}
@@ -78,9 +182,9 @@ export default function AddRewardScreen() {
             autoFocus
           />
 
-          <Text style={styles.label}>Cost (coins)</Text>
+          <Text style={styles.label}>Cost (points)</Text>
           <View style={styles.costSelector}>
-            {["5", "10", "15", "20", "30", "50"].map((val) => (
+            {["50", "100", "150", "200", "300", "500"].map((val) => (
               <Pressable
                 key={val}
                 onPress={() => {
@@ -142,28 +246,6 @@ export default function AddRewardScreen() {
             ))}
           </View>
 
-          <Text style={styles.label}>Color</Text>
-          <View style={styles.colorGrid}>
-            {REWARD_COLORS.map((color) => (
-              <Pressable
-                key={color}
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setSelectedColor(color);
-                }}
-                style={[
-                  styles.colorOption,
-                  { backgroundColor: color },
-                  selectedColor === color && styles.colorOptionSelected,
-                ]}
-              >
-                {selectedColor === color && (
-                  <Ionicons name="checkmark" size={18} color="#fff" />
-                )}
-              </Pressable>
-            ))}
-          </View>
-
           <View style={styles.preview}>
             <Text style={styles.previewLabel}>Preview</Text>
             <View style={styles.previewCard}>
@@ -179,18 +261,41 @@ export default function AddRewardScreen() {
                   color={selectedColor}
                 />
               </View>
-              <Text style={styles.previewName}>
+              <Text style={styles.previewName} numberOfLines={2}>
                 {name || "Reward Name"}
               </Text>
               <View style={styles.previewCostBadge}>
                 <Ionicons name="diamond" size={12} color={Colors.accent} />
-                <Text style={styles.previewCostText}>{cost || "10"}</Text>
+                 <Text style={styles.previewCostText}>{parseInt(cost) || 50}</Text>
               </View>
             </View>
           </View>
 
-          <View style={{ height: insets.bottom + 20 }} />
         </ScrollView>
+
+        {/* Custom Error Modal */}
+        <Modal
+          visible={!!errorMsg}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setErrorMsg(null)}
+        >
+          <View style={styles.errorModalOverlay}>
+            <View style={styles.errorModalContent}>
+              <View style={styles.errorModalIconContainer}>
+                <Ionicons name="alert-circle" size={48} color={Colors.error} />
+              </View>
+              <Text style={styles.errorModalTitle}>Oops! 🙀</Text>
+              <Text style={styles.errorModalText}>{errorMsg}</Text>
+              <Pressable
+                style={styles.errorModalButton}
+                onPress={() => setErrorMsg(null)}
+              >
+                <Text style={styles.errorModalButtonText}>Try Again</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
       </View>
     </KeyboardAvoidingView>
   );
@@ -224,7 +329,24 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   scrollContent: {
-    padding: 20,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 40,
+  },
+  errorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.error + '15',
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 20,
+    gap: 8,
+  },
+  errorText: {
+    flex: 1,
+    color: Colors.error,
+    fontFamily: 'Nunito_600SemiBold',
+    fontSize: 14,
   },
   label: {
     fontSize: 14,
@@ -334,6 +456,7 @@ const styles = StyleSheet.create({
     color: Colors.text,
     textAlign: "center",
     marginBottom: 8,
+    flexShrink: 1,
   },
   previewCostBadge: {
     flexDirection: "row",
@@ -344,9 +467,61 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 12,
   },
-  previewCostText: {
-    fontSize: 13,
-    fontFamily: "Nunito_700Bold",
-    color: Colors.accentDark,
+  errorModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  errorModalContent: {
+    backgroundColor: Colors.surface,
+    borderRadius: 24,
+    padding: 24,
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: 340,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  errorModalIconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: Colors.error + '15',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  errorModalTitle: {
+    fontSize: 22,
+    fontFamily: 'Nunito_800ExtraBold',
+    color: Colors.text,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  errorModalText: {
+    fontSize: 16,
+    fontFamily: 'Nunito_500Medium',
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 22,
+  },
+  errorModalButton: {
+    backgroundColor: Colors.error,
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    borderRadius: 16,
+    width: '100%',
+    alignItems: 'center',
+  },
+  errorModalButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontFamily: 'Nunito_700Bold',
   },
 });

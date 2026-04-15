@@ -9,7 +9,10 @@ export function getApiUrl(): string {
   let host = process.env.EXPO_PUBLIC_DOMAIN;
 
   if (!host) {
-    throw new Error("EXPO_PUBLIC_DOMAIN is not set");
+    console.warn('[QUERY-CLIENT] EXPO_PUBLIC_DOMAIN not set - using fallback for offline mode');
+    // Return a placeholder URL that won't crash - queries will fail gracefully
+    return 'https://localhost:3000';
+    // throw new Error("EXPO_PUBLIC_DOMAIN is not set");
   }
 
   let url = new URL(`https://${host}`);
