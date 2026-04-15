@@ -1,0 +1,9 @@
+450:   const balance = await getBalance(targetProfileId);
+451:   await setBalance(balance + habit.coinReward, targetProfileId);
+452:   
+453:   // Increment total completions in stats
+454:   await db.updateUserStats({
+455:     totalCompletions: 1, // Increment by 1
+456:   }, targetProfileId);
+457: 
+458:   return completion;
