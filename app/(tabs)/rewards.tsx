@@ -38,7 +38,7 @@ import {
   addBonusPoints,
   applyPenaltyPoints,
   resetStreak,
-  isParentProfile,
+  checkIsParent,
 } from "../../lib/storage";
 
 function RewardCard({
@@ -269,7 +269,7 @@ export default function RewardsScreen() {
         bonusAmount: reminderSettings.bonusAmount,
         penaltyAmount: reminderSettings.penaltyAmount,
       });
-      setIsParent(isParentProfile());
+      setIsParent(await checkIsParent());
     } catch (error) {
       console.error('Error loading rewards data:', error);
     } finally {

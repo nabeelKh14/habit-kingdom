@@ -43,6 +43,7 @@ import {
   isHabitDueToday,
   setActiveProfileId,
   getProfiles,
+  getActiveProfile,
   type Habit,
   type Profile,
   restoreStreakWithCoins,
@@ -393,8 +394,7 @@ export default function HabitsScreen() {
       setProfiles(profileList);
       
       // Find active profile
-      const activeId = await getActiveProfileId();
-      const current = profileList.find(p => p.id === activeId) || profileList[0] || null;
+      const current = await getActiveProfile() || profileList[0] || null;
       setActiveProfile(current);
       
       setLoading(false);

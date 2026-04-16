@@ -25,6 +25,7 @@ import {
 } from "../lib/settings-storage";
 import {
   getProfiles,
+  getActiveProfile,
   renameProfile,
   removeProfile,
   createProfile,
@@ -78,10 +79,11 @@ export default function SettingsScreen() {
 
   const loadSettings = async () => {
     try {
-      const [s, icon, p] = await Promise.all([
+      const [s, icon, p, activeProfile] = await Promise.all([
         getReminderSettings(),
         getCurrentIcon(),
         getProfiles(),
+        getActiveProfile(),
       ]);
       setSettings(s);
       setSelectedIconId(icon);

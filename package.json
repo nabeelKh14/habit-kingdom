@@ -17,7 +17,9 @@
     "lint": "npx expo lint",
     "lint:fix": "npx expo lint --fix",
     "android": "expo run:android",
-    "ios": "expo run:ios"
+    "ios": "expo run:ios",
+    "build:android:debug": "cd android && JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=~/Library/Android/sdk ./gradlew assembleDebug",
+    "build:android:release": "cd android && JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=~/Library/Android/sdk ./gradlew assembleRelease"
   },
   "dependencies": {
     "@expo-google-fonts/nunito": "^0.4.2",

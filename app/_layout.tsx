@@ -17,8 +17,8 @@ import {
 } from "@expo-google-fonts/nunito";
 import * as Notifications from "expo-notifications";
 import { requestNotificationPermissions } from "../lib/notifications";
-import { isOnboardingComplete, setOnboardingComplete, getActiveProfileId, getSavedProfiles } from "../lib/onboarding-storage";
-import { setActiveProfileId, getProfiles } from "../lib/storage";
+import { isOnboardingComplete, setOnboardingComplete, getSavedProfiles } from "../lib/onboarding-storage";
+import { setActiveProfileId, getProfiles, getActiveProfileIdAsync } from "../lib/storage";
 import OnboardingScreen from "./onboarding";
 import Colors from "../constants/colors";
 
@@ -107,7 +107,7 @@ export default function RootLayout() {
         
         if (complete) {
           // Initialize active profile from storage
-          const activeId = await getActiveProfileId();
+          const activeId = await getActiveProfileIdAsync();
           setActiveProfileId(activeId);
           
           // Sync profiles from database
