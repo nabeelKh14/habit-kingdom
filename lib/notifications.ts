@@ -139,7 +139,6 @@ function getNotificationTrigger(habit: Habit, hours: number, minutes: number): N
           hour: hours,
           minute: minutes,
           weekday: habit.daysOfWeek[0] + 1, // Convert 0-6 to 1-7 (Sunday = 1)
-          repeats: true,
         };
       }
       // Fallback: daily notification (as documented in UI)
@@ -157,7 +156,6 @@ function getNotificationTrigger(habit: Habit, hours: number, minutes: number): N
           hour: hours,
           minute: minutes,
           day: habit.dayOfMonth,
-          repeats: true,
         };
       }
       // Fallback: daily notification (as documented in UI)

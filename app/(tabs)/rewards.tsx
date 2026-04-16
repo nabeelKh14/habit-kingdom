@@ -242,7 +242,7 @@ export default function RewardsScreen() {
   const insets = useSafeAreaInsets();
   const [points, setPoints] = useState(0);
   const [rewards, setRewards] = useState<Reward[]>([]);
-  const [trophies, setTrophies] = useState<Trophy[]>([]);
+  const [trophies, setTrophies] = useState<TrophyWithStatus[]>([]);
   const [stats, setStats] = useState<UserStats | null>(null);
   const [activeTab, setActiveTab] = useState<'rewards' | 'trophies'>('rewards');
   const [loading, setLoading] = useState(true);
@@ -343,7 +343,7 @@ export default function RewardsScreen() {
         { text: "Cancel", style: "cancel" },
         {
           text: "Add",
-          onPress: async (val) => {
+          onPress: async (val?: string) => {
             const num = parseInt(val || "0", 10);
             if (isNaN(num) || num <= 0) {
               Alert.alert("Invalid Amount", "Please enter a positive number.");
@@ -382,7 +382,7 @@ export default function RewardsScreen() {
         {
           text: "Deduct",
           style: "destructive",
-          onPress: async (val) => {
+          onPress: async (val?: string) => {
             const num = parseInt(val || "0", 10);
             if (isNaN(num) || num <= 0) {
               Alert.alert("Invalid Amount", "Please enter a positive number.");
@@ -591,7 +591,12 @@ export default function RewardsScreen() {
             renderItem={({ item }) => (
               <TrophyCard
                 trophy={item}
-                stats={stats}
+                stats={stats || {
+                  totalCompletions: 0,
+                  longestStreak: 0,
+                  longestSingleHabitStreak: 0,
+                  longestSingleHabitId: '',
+                }}
               />
             )}
             contentContainerStyle={[

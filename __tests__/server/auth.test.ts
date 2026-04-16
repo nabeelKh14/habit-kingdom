@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { Mock } from 'vitest';
 import { signToken, verifyToken, authenticate, requireParent } from '../../server/middleware';
 
 describe('JWT Token', () => {
@@ -61,7 +62,7 @@ describe('JWT Token', () => {
 describe('Authentication Middleware', () => {
   let mockReq: any;
   let mockRes: any;
-  let mockNext: vi.Mock;
+  let mockNext: Mock;
 
   beforeEach(() => {
     mockReq = {
@@ -122,7 +123,7 @@ describe('Authentication Middleware', () => {
 describe('RequireParent Middleware', () => {
   let mockReq: any;
   let mockRes: any;
-  let mockNext: vi.Mock;
+  let mockNext: Mock;
 
   beforeEach(() => {
     mockReq = {};

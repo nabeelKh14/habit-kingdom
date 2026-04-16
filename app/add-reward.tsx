@@ -355,6 +355,25 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     marginTop: 16,
   },
+  profileSelector: {
+    marginBottom: 8,
+  },
+  profileChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+  },
+  profileChipText: {
+    fontSize: 14,
+    fontFamily: "Nunito_600SemiBold",
+    color: Colors.textSecondary,
+  },
   input: {
     backgroundColor: Colors.surface,
     borderRadius: 12,
@@ -466,6 +485,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 12,
+  },
+  previewCostText: {
+    fontSize: 13,
+    fontFamily: "Nunito_700Bold",
+    color: Colors.accentDark,
   },
   errorModalOverlay: {
     flex: 1,

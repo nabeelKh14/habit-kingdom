@@ -19,7 +19,7 @@ config.resolver = {
 // Fix react-native-worklets web compatibility issue
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   if (platform === 'web' && moduleName === 'react-native-worklets') {
-    return context.resolveRequest(context, 'react-native-worklets/lib/module/WorkletsModule/JSWorklets.js', platform);
+    return context.resolveRequest(context, 'react-native-worklets/lib/module/mock.js', platform);
   }
   return context.resolveRequest(context, moduleName, platform);
 };

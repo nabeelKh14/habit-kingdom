@@ -7,6 +7,7 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   if (db) return db;
 
   try {
+    // Try to open database
     db = await SQLite.openDatabaseAsync("kidhabit.db");
     await db.execAsync("PRAGMA foreign_keys = ON;");
     
@@ -16,11 +17,18 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
     // Initialize tables if needed (for fresh installs)
     await initializeTables(db);
     
+    console.log('[DB] Database initialized successfully');
     return db;
   } catch (error) {
     console.error('[DB] Database initialization failed:', error);
+    // Return null if initialization fails - storage functions will handle this
     throw error;
   }
+}
+
+// Check if database is available
+export function isDatabaseAvailable(): boolean {
+  return db !== null;
 }
 
 // Transaction wrapper for atomic operations
