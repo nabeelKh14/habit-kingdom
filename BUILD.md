@@ -1,6 +1,29 @@
 # Building Habit Kingdom APK
 
-This document explains how to build a standalone APK that runs without Metro bundler.
+This document explains how to build standalone APKs for Android.
+
+## Quick Summary
+
+| APK Type | Metro Required | JS Bundle | Size | Use Case |
+|----------|---------------|-----------|------|----------|
+| **Release** | ❌ No | ✅ Embedded | ~100MB | **Recommended** - Works standalone |
+| Debug | ✅ Yes | ❌ Not embedded | ~200MB | Development only |
+
+**For testing/distribution: Always use the Release APK.**
+
+---
+
+## Fast Build Commands
+
+```bash
+# Build standalone release APK (recommended)
+npm run build:android:release
+
+# Build debug APK (requires Metro running)
+npm run build:android:debug
+```
+
+**Output:** `habit-kingdom-release.apk` (in project root)
 
 ## Prerequisites
 
@@ -191,30 +214,23 @@ ls $ANDROID_HOME
 
 ---
 
-## Release vs Debug Build
+## APK Types Explained
 
 | Feature | Debug APK | Release APK |
 |---------|-----------|-------------|
-| JS Bundle | Not embedded | Embedded in APK |
-| Metro Required | Yes | No |
+| JS Bundle | Not embedded | **Embedded** ✅ |
+| Metro Required | Yes | **No** ✅ |
 | Optimization | None | Full optimization |
 | Size | ~200MB | ~100MB |
 | Signing | Debug keystore | Debug keystore |
 
-For distribution, create a proper signing keystore and update `android/app/build.gradle` with your production credentials.
+### Why Release APK is Better
 
----
+- ✅ **Works without Metro** - Install on any Android device
+- ✅ **Smaller size** - ~100MB vs ~200MB
+- ✅ **Optimized** - Better performance
+- ✅ **Production-ready** - Can be distributed
 
-## Quick Build Commands
+### Signing
 
-After initial setup, you can use these simplified commands:
-
-```bash
-# Build debug APK
-npm run build:android:debug
-
-# Build release APK
-npm run build:android:release
-```
-
-These commands are defined in `package.json` under the scripts section.
+The release APK is currently signed with the debug keystore. For production distribution, create a proper signing keystore and update `android/app/build.gradle`.
