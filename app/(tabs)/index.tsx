@@ -652,7 +652,7 @@ export default function HabitsScreen() {
             <View style={styles.greenHeaderGradient}>
               <View style={styles.greenHeaderTop}>
                 <View style={styles.greenHeaderLeft}>
-                  <Text style={styles.greenHeaderLabel}>{stat.profile.name}'s Points</Text>
+                  <Text style={styles.greenHeaderLabel}>{stat.profile.name}s Points</Text>
                   <View style={styles.greenHeaderBalanceRow}>
                     <Ionicons name="diamond" size={24} color="#FBBF24" />
                     <Text style={styles.greenHeaderBalance}>{stat.points}</Text>

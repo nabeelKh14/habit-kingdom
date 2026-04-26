@@ -1,27 +1,31 @@
 import * as SQLite from "expo-sqlite";
+import { drizzle, ExpoSQLiteDatabase } from "drizzle-orm/expo-sqlite";
+import { eq, and, isNull, desc, sql, or } from "drizzle-orm";
+import * as schema from "../shared/schema";
 import { runMigrations } from "./migrations";
 
-let db: SQLite.SQLiteDatabase | null = null;
+let db: ExpoSQLiteDatabase<typeof schema> | null = null;
 
-export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
+export function getDbInstance(): ExpoSQLiteDatabase<typeof schema> | null {
+  return db;
+}
+
+export async function getDatabase(): Promise<ExpoSQLiteDatabase<typeof schema>> {
   if (db) return db;
 
   try {
-    // Try to open database
-    db = await SQLite.openDatabaseAsync("kidhabit.db");
-    await db.execAsync("PRAGMA foreign_keys = ON;");
-    
+    const sqliteDb = await SQLite.openDatabaseAsync("kidhabit.db");
+    await sqliteDb.execAsync("PRAGMA foreign_keys = ON;");
+
+    db = drizzle(sqliteDb, { schema });
+
     // Run migrations
-    await runMigrations(db);
-    
-    // Initialize tables if needed (for fresh installs)
-    await initializeTables(db);
-    
-    console.log('[DB] Database initialized successfully');
+    await runMigrations(sqliteDb);
+
+    console.log("[DB] Database initialized successfully with Drizzle ORM");
     return db;
   } catch (error) {
-    console.error('[DB] Database initialization failed:', error);
-    // Return null if initialization fails - storage functions will handle this
+    console.error("[DB] Database initialization failed:", error);
     throw error;
   }
 }
@@ -33,246 +37,27 @@ export function isDatabaseAvailable(): boolean {
 
 // Transaction wrapper for atomic operations
 export async function withTransaction<T>(
-  operations: (db: SQLite.SQLiteDatabase) => Promise<T>
+  operations: (db: ExpoSQLiteDatabase<typeof schema>) => Promise<T>
 ): Promise<T> {
   const database = await getDatabase();
   try {
-    await database.execAsync("BEGIN TRANSACTION");
+    await database.run("BEGIN TRANSACTION");
     const result = await operations(database);
-    await database.execAsync("COMMIT");
+    await database.run("COMMIT");
     return result;
   } catch (error) {
-    await database.execAsync("ROLLBACK");
+    await database.run("ROLLBACK");
     throw error;
   }
 }
 
-// ==================== INITIALIZATION ====================
-
-async function initializeTables(database: SQLite.SQLiteDatabase): Promise<void> {
-  // Create profiles table
-  await database.execAsync(`
-    CREATE TABLE IF NOT EXISTS profiles (
-      id TEXT PRIMARY KEY NOT NULL,
-      name TEXT NOT NULL,
-      type TEXT NOT NULL CHECK(type IN ('child', 'parent')),
-      createdAt TEXT NOT NULL
-    );
-  `);
-
-  // Create indexes for profiles
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_profiles_type ON profiles(type);
-  `);
-
-  // Create habits table with soft delete support
-  await database.execAsync(`
-    CREATE TABLE IF NOT EXISTS habits (
-      id TEXT PRIMARY KEY NOT NULL,
-      name TEXT NOT NULL,
-      icon TEXT NOT NULL,
-      coinReward INTEGER NOT NULL,
-      color TEXT NOT NULL,
-      createdAt TEXT NOT NULL,
-      frequency TEXT DEFAULT 'once',
-      scheduledTime TEXT,
-      daysOfWeek TEXT,
-      dayOfMonth INTEGER,
-      isPaused INTEGER DEFAULT 0,
-      pauseUntil TEXT,
-      notificationsEnabled INTEGER DEFAULT 0,
-      notificationTime TEXT,
-      profileId TEXT NOT NULL,
-      deletedAt TEXT
-    );
-  `);
-
-  // Create indexes for habits
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_habits_profileId ON habits(profileId);
-  `);
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_habits_createdAt ON habits(createdAt);
-  `);
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_habits_frequency ON habits(frequency);
-  `);
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_habits_deletedAt ON habits(deletedAt);
-  `);
-
-  // Create rewards table with soft delete support
-  await database.execAsync(`
-    CREATE TABLE IF NOT EXISTS rewards (
-      id TEXT PRIMARY KEY NOT NULL,
-      name TEXT NOT NULL,
-      icon TEXT NOT NULL,
-      cost INTEGER NOT NULL,
-      color TEXT NOT NULL,
-      createdAt TEXT NOT NULL,
-      profileId TEXT NOT NULL,
-      deletedAt TEXT
-    );
-  `);
-
-  // Create indexes for rewards
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_rewards_profileId ON rewards(profileId);
-  `);
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_rewards_createdAt ON rewards(createdAt);
-  `);
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_rewards_deletedAt ON rewards(deletedAt);
-  `);
-
-  // Create completions table
-  await database.execAsync(`
-    CREATE TABLE IF NOT EXISTS completions (
-      id TEXT PRIMARY KEY NOT NULL,
-      habitId TEXT NOT NULL,
-      habitName TEXT NOT NULL,
-      coinReward INTEGER NOT NULL,
-      completedAt TEXT NOT NULL,
-      profileId TEXT NOT NULL
-    );
-  `);
-
-  // Create indexes for completions
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_completions_profileId ON completions(profileId);
-  `);
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_completions_habitId ON completions(habitId);
-  `);
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_completions_completedAt ON completions(completedAt);
-  `);
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_completions_profile_completed 
-    ON completions(profileId, completedAt DESC);
-  `);
-
-  // Create redemptions table
-  await database.execAsync(`
-    CREATE TABLE IF NOT EXISTS redemptions (
-      id TEXT PRIMARY KEY NOT NULL,
-      rewardId TEXT NOT NULL,
-      rewardName TEXT NOT NULL,
-      cost INTEGER NOT NULL,
-      redeemedAt TEXT NOT NULL,
-      profileId TEXT NOT NULL
-    );
-  `);
-
-  // Create indexes for redemptions
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_redemptions_profileId ON redemptions(profileId);
-  `);
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_redemptions_rewardId ON redemptions(rewardId);
-  `);
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_redemptions_redeemedAt ON redemptions(redeemedAt);
-  `);
-
-  // Create wallet table
-  await database.execAsync(`
-    CREATE TABLE IF NOT EXISTS wallet (
-      profileId TEXT PRIMARY KEY NOT NULL,
-      balance INTEGER DEFAULT 0
-    );
-  `);
-
-  // Create achievements table
-  await database.execAsync(`
-    CREATE TABLE IF NOT EXISTS achievements (
-      id TEXT PRIMARY KEY NOT NULL,
-      trophyId TEXT NOT NULL,
-      unlockedAt TEXT NOT NULL,
-      profileId TEXT NOT NULL
-    );
-  `);
-
-  // Create indexes for achievements
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_achievements_profileId ON achievements(profileId);
-  `);
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_achievements_trophyId ON achievements(trophyId);
-  `);
-
-  // Create user stats table
-  await database.execAsync(`
-    CREATE TABLE IF NOT EXISTS user_stats (
-      profileId TEXT PRIMARY KEY NOT NULL,
-      totalCompletions INTEGER DEFAULT 0,
-      longestStreak INTEGER DEFAULT 0,
-      longestSingleHabitStreak INTEGER DEFAULT 0,
-      longestSingleHabitId TEXT
-    );
-  `);
-
-  // Create purchased skills table with UNIQUE constraint
-  await database.execAsync(`
-    CREATE TABLE IF NOT EXISTS purchased_skills (
-      id TEXT PRIMARY KEY NOT NULL,
-      skillId TEXT NOT NULL,
-      profileId TEXT NOT NULL,
-      purchasedAt TEXT NOT NULL,
-      UNIQUE(profileId, skillId)
-    );
-  `);
-
-  // Create indexes for purchased_skills
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_purchased_skills_skillId ON purchased_skills(skillId);
-  `);
-  await database.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_purchased_skills_profileId ON purchased_skills(profileId);
-  `);
-
-  // Create profile_settings table
-  await database.execAsync(`
-    CREATE TABLE IF NOT EXISTS profile_settings (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      maxParents INTEGER DEFAULT 2,
-      maxChildren INTEGER DEFAULT 1
-    );
-  `);
-  await database.execAsync(`
-    INSERT OR IGNORE INTO profile_settings (id, maxParents, maxChildren) VALUES (1, 2, 1);
-  `);
-
-  // Initialize default profile if none exist
-  await database.execAsync(`
-    INSERT OR IGNORE INTO profiles (id, name, type, createdAt) 
-    VALUES ('default', 'Default', 'child', datetime('now'));
-  `);
-  await database.execAsync(`
-    INSERT OR IGNORE INTO wallet (profileId, balance) VALUES ('default', 0);
-  `);
-  await database.execAsync(`
-    INSERT OR IGNORE INTO user_stats (profileId, totalCompletions, longestStreak, longestSingleHabitStreak) 
-    VALUES ('default', 0, 0, 0);
-  `);
-
-  // Run migrations for any pending schema updates
-  await runMigrations(database);
-}
-
 // ==================== PROFILE OPERATIONS ====================
 
-export interface ProfileRow {
-  id: string;
-  name: string;
-  type: string;
-  createdAt: string;
-}
+export type ProfileRow = typeof schema.profiles.$inferSelect;
 
 export async function getAllProfiles(): Promise<ProfileRow[]> {
   const database = await getDatabase();
-  return await database.getAllAsync<ProfileRow>("SELECT * FROM profiles ORDER BY createdAt ASC");
+  return await database.select().from(schema.profiles).orderBy(schema.profiles.createdAt);
 }
 
 export async function insertProfile(profile: {
@@ -282,108 +67,93 @@ export async function insertProfile(profile: {
   createdAt: string;
 }): Promise<void> {
   const database = await getDatabase();
-  await database.runAsync(
-    `INSERT INTO profiles (id, name, type, createdAt) VALUES (?, ?, ?, ?)`,
-    [profile.id, profile.name, profile.type, profile.createdAt]
-  );
-  await database.runAsync(
-    `INSERT OR IGNORE INTO wallet (profileId, balance) VALUES (?, 0)`,
-    [profile.id]
-  );
-  await database.runAsync(
-    `INSERT OR IGNORE INTO user_stats (profileId, totalCompletions, longestStreak, longestSingleHabitStreak) VALUES (?, 0, 0, 0)`,
-    [profile.id]
-  );
+  await database.insert(schema.profiles).values({
+    ...profile,
+    type: profile.type as "child" | "parent",
+  } as typeof schema.profiles.$inferInsert);
+  await database.insert(schema.wallet).values({ profileId: profile.id, balance: 0 }).onConflictDoNothing();
+  await database.insert(schema.userStats).values({
+    profileId: profile.id,
+    totalCompletions: 0,
+    longestStreak: 0,
+    longestSingleHabitStreak: 0,
+  }).onConflictDoNothing();
 }
 
 export async function updateProfile(id: string, name: string): Promise<void> {
   const database = await getDatabase();
-  await database.runAsync("UPDATE profiles SET name = ? WHERE id = ?", [name, id]);
+  await database.update(schema.profiles).set({ name }).where(eq(schema.profiles.id, id));
 }
 
 export async function removeProfile(id: string): Promise<void> {
-  if (id === 'default') {
-    throw new Error('Cannot delete the default profile');
+  if (id === "default") {
+    throw new Error("Cannot delete the default profile");
   }
-  
+
   const database = await getDatabase();
-  
-  const profile = await database.getFirstAsync<{ id: string; type: string }>(
-    "SELECT id, type FROM profiles WHERE id = ?", 
-    [id]
-  );
-  
-  if (!profile) {
+
+  const profile = await database.select({ id: schema.profiles.id, type: schema.profiles.type })
+    .from(schema.profiles)
+    .where(eq(schema.profiles.id, id))
+    .limit(1);
+
+  if (!profile.length) {
     return;
   }
-  
-  if (profile.type === 'child') {
+
+  if (profile[0].type === "child") {
     // Child profile: cascade delete
-    await database.runAsync("DELETE FROM habits WHERE profileId = ?", [id]);
-    await database.runAsync("DELETE FROM rewards WHERE profileId = ?", [id]);
-    await database.runAsync("DELETE FROM completions WHERE profileId = ?", [id]);
-    await database.runAsync("DELETE FROM redemptions WHERE profileId = ?", [id]);
-    await database.runAsync("DELETE FROM achievements WHERE profileId = ?", [id]);
-    await database.runAsync("DELETE FROM user_stats WHERE profileId = ?", [id]);
-    await database.runAsync("DELETE FROM wallet WHERE profileId = ?", [id]);
-    await database.runAsync("DELETE FROM purchased_skills WHERE profileId = ?", [id]);
+    await database.delete(schema.habits).where(eq(schema.habits.profileId, id));
+    await database.delete(schema.rewards).where(eq(schema.rewards.profileId, id));
+    await database.delete(schema.completions).where(eq(schema.completions.profileId, id));
+    await database.delete(schema.redemptions).where(eq(schema.redemptions.profileId, id));
+    await database.delete(schema.achievements).where(eq(schema.achievements.profileId, id));
+    await database.delete(schema.userStats).where(eq(schema.userStats.profileId, id));
+    await database.delete(schema.wallet).where(eq(schema.wallet.profileId, id));
+    await database.delete(schema.purchasedSkills).where(eq(schema.purchasedSkills.profileId, id));
   } else {
     // Parent profile: reassign to default
-    const reassignTo = 'default';
-    await database.runAsync("UPDATE habits SET profileId = ? WHERE profileId = ?", [reassignTo, id]);
-    await database.runAsync("UPDATE rewards SET profileId = ? WHERE profileId = ?", [reassignTo, id]);
-    await database.runAsync("UPDATE completions SET profileId = ? WHERE profileId = ?", [reassignTo, id]);
-    await database.runAsync("UPDATE redemptions SET profileId = ? WHERE profileId = ?", [reassignTo, id]);
-    await database.runAsync("UPDATE achievements SET profileId = ? WHERE profileId = ?", [reassignTo, id]);
-    await database.runAsync("UPDATE user_stats SET profileId = ? WHERE profileId = ?", [reassignTo, id]);
-    await database.runAsync("UPDATE wallet SET profileId = ? WHERE profileId = ?", [reassignTo, id]);
-    await database.runAsync("UPDATE purchased_skills SET profileId = ? WHERE profileId = ?", [reassignTo, id]);
+    const reassignTo = "default";
+    await database.update(schema.habits).set({ profileId: reassignTo }).where(eq(schema.habits.profileId, id));
+    await database.update(schema.rewards).set({ profileId: reassignTo }).where(eq(schema.rewards.profileId, id));
+    await database.update(schema.completions).set({ profileId: reassignTo }).where(eq(schema.completions.profileId, id));
+    await database.update(schema.redemptions).set({ profileId: reassignTo }).where(eq(schema.redemptions.profileId, id));
+    await database.update(schema.achievements).set({ profileId: reassignTo }).where(eq(schema.achievements.profileId, id));
+    await database.update(schema.userStats).set({ profileId: reassignTo }).where(eq(schema.userStats.profileId, id));
+    await database.update(schema.wallet).set({ profileId: reassignTo }).where(eq(schema.wallet.profileId, id));
+    await database.update(schema.purchasedSkills).set({ profileId: reassignTo }).where(eq(schema.purchasedSkills.profileId, id));
   }
-  
-  await database.runAsync("DELETE FROM profiles WHERE id = ?", [id]);
+
+  await database.delete(schema.profiles).where(eq(schema.profiles.id, id));
 }
 
 export async function getProfileSettings(): Promise<{ maxParents: number; maxChildren: number }> {
   const database = await getDatabase();
-  const result = await database.getFirstAsync<{ maxParents: number; maxChildren: number }>(
-    "SELECT maxParents, maxChildren FROM profile_settings WHERE id = 1"
-  );
-  return result || { maxParents: 2, maxChildren: 1 };
+  const result = await database.select().from(schema.profileSettings).where(eq(schema.profileSettings.id, 1)).limit(1);
+  return result[0] || { maxParents: 2, maxChildren: 1 };
 }
 
 // ==================== HABIT OPERATIONS ====================
 
-export interface HabitRow {
-  id: string;
-  name: string;
-  icon: string;
-  coinReward: number;
-  color: string;
-  createdAt: string;
-  frequency: string;
-  scheduledTime: string | null;
-  daysOfWeek: string | null;
-  dayOfMonth: number | null;
-  isPaused: number;
-  pauseUntil: string | null;
-  notificationsEnabled: number;
-  notificationTime: string | null;
-  profileId: string | null;
-  deletedAt: string | null;
-}
+export type HabitRow = typeof schema.habits.$inferSelect;
 
 export async function getAllHabits(profileId?: string, includeArchived = false): Promise<HabitRow[]> {
   const database = await getDatabase();
+
+  const query = database.select().from(schema.habits);
+
   if (profileId) {
-    const query = includeArchived
-      ? "SELECT * FROM habits WHERE profileId = ? ORDER BY createdAt DESC"
-      : "SELECT * FROM habits WHERE profileId = ? AND deletedAt IS NULL ORDER BY createdAt DESC";
-    return await database.getAllAsync<HabitRow>(query, [profileId]);
+    if (!includeArchived) {
+      return await query.where(and(eq(schema.habits.profileId, profileId), isNull(schema.habits.deletedAt))).orderBy(desc(schema.habits.createdAt));
+    }
+    return await query.where(eq(schema.habits.profileId, profileId)).orderBy(desc(schema.habits.createdAt));
   }
-  const query = includeArchived
-    ? "SELECT * FROM habits ORDER BY createdAt DESC"
-    : "SELECT * FROM habits WHERE deletedAt IS NULL ORDER BY createdAt DESC";
-  return await database.getAllAsync<HabitRow>(query);
+
+  if (!includeArchived) {
+    return await query.where(isNull(schema.habits.deletedAt)).orderBy(desc(schema.habits.createdAt));
+  }
+
+  return await query.orderBy(desc(schema.habits.createdAt));
 }
 
 export async function insertHabit(habit: {
@@ -402,52 +172,33 @@ export async function insertHabit(habit: {
   profileId: string;
 }): Promise<void> {
   const database = await getDatabase();
-  await database.runAsync(
-    `INSERT INTO habits (id, name, icon, coinReward, color, createdAt, frequency, scheduledTime, daysOfWeek, dayOfMonth, notificationsEnabled, notificationTime, profileId) 
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      habit.id,
-      habit.name,
-      habit.icon,
-      habit.coinReward,
-      habit.color,
-      habit.createdAt,
-      habit.frequency,
-      habit.scheduledTime || null,
-      habit.daysOfWeek || null,
-      habit.dayOfMonth || null,
-      habit.notificationsEnabled ?? 0,
-      habit.notificationTime || null,
-      habit.profileId,
-    ]
-  );
+  await database.insert(schema.habits).values({
+    ...habit,
+    frequency: habit.frequency as "once" | "daily" | "weekly" | "monthly",
+    notificationsEnabled: habit.notificationsEnabled ?? 0,
+  } as typeof schema.habits.$inferInsert);
 }
 
 export async function archiveHabit(id: string): Promise<void> {
   const database = await getDatabase();
-  await database.runAsync(
-    "UPDATE habits SET deletedAt = datetime('now') WHERE id = ?",
-    [id]
-  );
+  await database.update(schema.habits).set({ deletedAt: new Date().toISOString() }).where(eq(schema.habits.id, id));
 }
 
 export async function restoreHabit(id: string): Promise<void> {
   const database = await getDatabase();
-  await database.runAsync(
-    "UPDATE habits SET deletedAt = NULL WHERE id = ?",
-    [id]
-  );
+  await database.update(schema.habits).set({ deletedAt: null }).where(eq(schema.habits.id, id));
 }
 
 export async function removeHabit(id: string): Promise<void> {
   const database = await getDatabase();
-  await database.runAsync("DELETE FROM completions WHERE habitId = ?", [id]);
-  await database.runAsync("DELETE FROM habits WHERE id = ?", [id]);
+  await database.delete(schema.completions).where(eq(schema.completions.habitId, id));
+  await database.delete(schema.habits).where(eq(schema.habits.id, id));
 }
 
 export async function getHabitById(id: string): Promise<HabitRow | null> {
   const database = await getDatabase();
-  return await database.getFirstAsync<HabitRow>("SELECT * FROM habits WHERE id = ?", [id]);
+  const result = await database.select().from(schema.habits).where(eq(schema.habits.id, id)).limit(1);
+  return result[0] || null;
 }
 
 export async function updateHabit(habit: {
@@ -467,58 +218,49 @@ export async function updateHabit(habit: {
   profileId?: string;
 }): Promise<void> {
   const database = await getDatabase();
-  
-  const fields: string[] = [];
-  const values: (string | number | null)[] = [];
-  
-  if (habit.name !== undefined) { fields.push('name = ?'); values.push(habit.name); }
-  if (habit.icon !== undefined) { fields.push('icon = ?'); values.push(habit.icon); }
-  if (habit.coinReward !== undefined) { fields.push('coinReward = ?'); values.push(habit.coinReward); }
-  if (habit.color !== undefined) { fields.push('color = ?'); values.push(habit.color); }
-  if (habit.frequency !== undefined) { fields.push('frequency = ?'); values.push(habit.frequency); }
-  if (habit.scheduledTime !== undefined) { fields.push('scheduledTime = ?'); values.push(habit.scheduledTime || null); }
-  if (habit.daysOfWeek !== undefined) { fields.push('daysOfWeek = ?'); values.push(habit.daysOfWeek || null); }
-  if (habit.dayOfMonth !== undefined) { fields.push('dayOfMonth = ?'); values.push(habit.dayOfMonth || null); }
-  if (habit.isPaused !== undefined) { fields.push('isPaused = ?'); values.push(habit.isPaused); }
-  if (habit.pauseUntil !== undefined) { fields.push('pauseUntil = ?'); values.push(habit.pauseUntil || null); }
-  if (habit.notificationsEnabled !== undefined) { fields.push('notificationsEnabled = ?'); values.push(habit.notificationsEnabled); }
-  if (habit.notificationTime !== undefined) { fields.push('notificationTime = ?'); values.push(habit.notificationTime || null); }
-  if (habit.profileId !== undefined) { fields.push('profileId = ?'); values.push(habit.profileId); }
-  
-  if (fields.length === 0) return;
-  
-  values.push(habit.id);
-  await database.runAsync(
-    `UPDATE habits SET ${fields.join(', ')} WHERE id = ?`,
-    values
-  );
+
+  const setValues: Partial<typeof schema.habits.$inferInsert> = {};
+
+  if (habit.name !== undefined) setValues.name = habit.name;
+  if (habit.icon !== undefined) setValues.icon = habit.icon;
+  if (habit.coinReward !== undefined) setValues.coinReward = habit.coinReward;
+  if (habit.color !== undefined) setValues.color = habit.color;
+  if (habit.frequency !== undefined) setValues.frequency = habit.frequency as "once" | "daily" | "weekly" | "monthly";
+  if (habit.scheduledTime !== undefined) setValues.scheduledTime = habit.scheduledTime || null;
+  if (habit.daysOfWeek !== undefined) setValues.daysOfWeek = habit.daysOfWeek || null;
+  if (habit.dayOfMonth !== undefined) setValues.dayOfMonth = habit.dayOfMonth || null;
+  if (habit.isPaused !== undefined) setValues.isPaused = habit.isPaused;
+  if (habit.pauseUntil !== undefined) setValues.pauseUntil = habit.pauseUntil || null;
+  if (habit.notificationsEnabled !== undefined) setValues.notificationsEnabled = habit.notificationsEnabled;
+  if (habit.notificationTime !== undefined) setValues.notificationTime = habit.notificationTime || null;
+  if (habit.profileId !== undefined) setValues.profileId = habit.profileId;
+
+  if (Object.keys(setValues).length === 0) return;
+
+  await database.update(schema.habits).set(setValues).where(eq(schema.habits.id, habit.id));
 }
 
 // ==================== REWARD OPERATIONS ====================
 
-export interface RewardRow {
-  id: string;
-  name: string;
-  icon: string;
-  cost: number;
-  color: string;
-  createdAt: string;
-  profileId: string | null;
-  deletedAt: string | null;
-}
+export type RewardRow = typeof schema.rewards.$inferSelect;
 
 export async function getAllRewards(profileId?: string, includeArchived = false): Promise<RewardRow[]> {
   const database = await getDatabase();
+
+  const query = database.select().from(schema.rewards);
+
   if (profileId) {
-    const query = includeArchived
-      ? "SELECT * FROM rewards WHERE profileId = ? ORDER BY createdAt DESC"
-      : "SELECT * FROM rewards WHERE profileId = ? AND deletedAt IS NULL ORDER BY createdAt DESC";
-    return await database.getAllAsync<RewardRow>(query, [profileId]);
+    if (!includeArchived) {
+      return await query.where(and(eq(schema.rewards.profileId, profileId), isNull(schema.rewards.deletedAt))).orderBy(desc(schema.rewards.createdAt));
+    }
+    return await query.where(eq(schema.rewards.profileId, profileId)).orderBy(desc(schema.rewards.createdAt));
   }
-  const query = includeArchived
-    ? "SELECT * FROM rewards ORDER BY createdAt DESC"
-    : "SELECT * FROM rewards WHERE deletedAt IS NULL ORDER BY createdAt DESC";
-  return await database.getAllAsync<RewardRow>(query);
+
+  if (!includeArchived) {
+    return await query.where(isNull(schema.rewards.deletedAt)).orderBy(desc(schema.rewards.createdAt));
+  }
+
+  return await query.orderBy(desc(schema.rewards.createdAt));
 }
 
 export async function insertReward(reward: {
@@ -531,29 +273,24 @@ export async function insertReward(reward: {
   profileId: string;
 }): Promise<void> {
   const database = await getDatabase();
-  await database.runAsync(
-    `INSERT INTO rewards (id, name, icon, cost, color, createdAt, profileId) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [reward.id, reward.name, reward.icon, reward.cost, reward.color, reward.createdAt, reward.profileId]
-  );
+  await database.insert(schema.rewards).values(reward);
 }
 
 export async function archiveReward(id: string): Promise<void> {
   const database = await getDatabase();
-  await database.runAsync(
-    "UPDATE rewards SET deletedAt = datetime('now') WHERE id = ?",
-    [id]
-  );
+  await database.update(schema.rewards).set({ deletedAt: new Date().toISOString() }).where(eq(schema.rewards.id, id));
 }
 
 export async function removeReward(id: string): Promise<void> {
   const database = await getDatabase();
-  await database.runAsync("DELETE FROM redemptions WHERE rewardId = ?", [id]);
-  await database.runAsync("DELETE FROM rewards WHERE id = ?", [id]);
+  await database.delete(schema.redemptions).where(eq(schema.redemptions.rewardId, id));
+  await database.delete(schema.rewards).where(eq(schema.rewards.id, id));
 }
 
 export async function getRewardById(id: string): Promise<RewardRow | null> {
   const database = await getDatabase();
-  return await database.getFirstAsync<RewardRow>("SELECT * FROM rewards WHERE id = ?", [id]);
+  const result = await database.select().from(schema.rewards).where(eq(schema.rewards.id, id)).limit(1);
+  return result[0] || null;
 }
 
 export async function updateReward(reward: {
@@ -565,65 +302,59 @@ export async function updateReward(reward: {
   profileId?: string;
 }): Promise<void> {
   const database = await getDatabase();
-  
-  const fields: string[] = [];
-  const values: (string | number | null)[] = [];
-  
-  if (reward.name !== undefined) { fields.push('name = ?'); values.push(reward.name); }
-  if (reward.icon !== undefined) { fields.push('icon = ?'); values.push(reward.icon); }
-  if (reward.cost !== undefined) { fields.push('cost = ?'); values.push(reward.cost); }
-  if (reward.color !== undefined) { fields.push('color = ?'); values.push(reward.color); }
-  if (reward.profileId !== undefined) { fields.push('profileId = ?'); values.push(reward.profileId); }
-  
-  if (fields.length === 0) return;
-  
-  values.push(reward.id);
-  await database.runAsync(
-    `UPDATE rewards SET ${fields.join(', ')} WHERE id = ?`,
-    values
-  );
+
+  const setValues: Partial<typeof schema.rewards.$inferInsert> = {};
+
+  if (reward.name !== undefined) setValues.name = reward.name;
+  if (reward.icon !== undefined) setValues.icon = reward.icon;
+  if (reward.cost !== undefined) setValues.cost = reward.cost;
+  if (reward.color !== undefined) setValues.color = reward.color;
+  if (reward.profileId !== undefined) setValues.profileId = reward.profileId;
+
+  if (Object.keys(setValues).length === 0) return;
+
+  await database.update(schema.rewards).set(setValues).where(eq(schema.rewards.id, reward.id));
 }
 
 // ==================== COMPLETION OPERATIONS ====================
 
-export interface CompletionRow {
-  id: string;
-  habitId: string;
-  habitName: string;
-  coinReward: number;
-  completedAt: string;
-  profileId: string | null;
-}
+export type CompletionRow = typeof schema.completions.$inferSelect;
 
 export async function getAllCompletions(profileId?: string): Promise<CompletionRow[]> {
   const database = await getDatabase();
+
   if (profileId) {
-    return await database.getAllAsync<CompletionRow>(
-      "SELECT * FROM completions WHERE profileId = ? ORDER BY completedAt DESC", 
-      [profileId]
-    );
+    return await database.select().from(schema.completions)
+      .where(eq(schema.completions.profileId, profileId))
+      .orderBy(desc(schema.completions.completedAt));
   }
-  return await database.getAllAsync<CompletionRow>("SELECT * FROM completions ORDER BY completedAt DESC");
+
+  return await database.select().from(schema.completions).orderBy(desc(schema.completions.completedAt));
 }
 
 export async function getCompletionsForHabit(habitId: string, profileId: string): Promise<CompletionRow[]> {
   const database = await getDatabase();
-  return await database.getAllAsync<CompletionRow>(
-    "SELECT * FROM completions WHERE habitId = ? AND profileId = ? ORDER BY completedAt DESC",
-    [habitId, profileId]
-  );
+  return await database.select().from(schema.completions)
+    .where(and(eq(schema.completions.habitId, habitId), eq(schema.completions.profileId, profileId)))
+    .orderBy(desc(schema.completions.completedAt));
 }
 
 export async function getTodayCompletionForHabit(
-  habitId: string, 
+  habitId: string,
   profileId: string,
   date: string
 ): Promise<CompletionRow | null> {
   const database = await getDatabase();
-  return await database.getFirstAsync<CompletionRow>(
-    "SELECT * FROM completions WHERE habitId = ? AND profileId = ? AND date(completedAt) = date(?) LIMIT 1",
-    [habitId, profileId, date]
-  );
+  const result = await database.select().from(schema.completions)
+    .where(
+      and(
+        eq(schema.completions.habitId, habitId),
+        eq(schema.completions.profileId, profileId),
+        sql`date(${schema.completions.completedAt}) = date(${date})`
+      )
+    )
+    .limit(1);
+  return result[0] || null;
 }
 
 export async function insertCompletion(completion: {
@@ -635,50 +366,41 @@ export async function insertCompletion(completion: {
   profileId: string;
 }): Promise<void> {
   const database = await getDatabase();
-  await database.runAsync(
-    `INSERT INTO completions (id, habitId, habitName, coinReward, completedAt, profileId) VALUES (?, ?, ?, ?, ?, ?)`,
-    [completion.id, completion.habitId, completion.habitName, completion.coinReward, completion.completedAt, completion.profileId]
-  );
+  await database.insert(schema.completions).values(completion);
 }
 
 export async function removeCompletion(id: string): Promise<void> {
   const database = await getDatabase();
-  await database.runAsync("DELETE FROM completions WHERE id = ?", [id]);
+  await database.delete(schema.completions).where(eq(schema.completions.id, id));
 }
 
 export async function removeCompletionForHabitToday(
-  habitId: string, 
+  habitId: string,
   profileId: string,
   date: string
 ): Promise<CompletionRow | null> {
   const database = await getDatabase();
   const completion = await getTodayCompletionForHabit(habitId, profileId, date);
   if (completion) {
-    await database.runAsync("DELETE FROM completions WHERE id = ?", [completion.id]);
+    await database.delete(schema.completions).where(eq(schema.completions.id, completion.id));
   }
   return completion;
 }
 
 // ==================== REDEMPTION OPERATIONS ====================
 
-export interface RedemptionRow {
-  id: string;
-  rewardId: string;
-  rewardName: string;
-  cost: number;
-  redeemedAt: string;
-  profileId: string | null;
-}
+export type RedemptionRow = typeof schema.redemptions.$inferSelect;
 
 export async function getAllRedemptions(profileId?: string): Promise<RedemptionRow[]> {
   const database = await getDatabase();
+
   if (profileId) {
-    return await database.getAllAsync<RedemptionRow>(
-      "SELECT * FROM redemptions WHERE profileId = ? ORDER BY redeemedAt DESC", 
-      [profileId]
-    );
+    return await database.select().from(schema.redemptions)
+      .where(eq(schema.redemptions.profileId, profileId))
+      .orderBy(desc(schema.redemptions.redeemedAt));
   }
-  return await database.getAllAsync<RedemptionRow>("SELECT * FROM redemptions ORDER BY redeemedAt DESC");
+
+  return await database.select().from(schema.redemptions).orderBy(desc(schema.redemptions.redeemedAt));
 }
 
 export async function insertRedemption(redemption: {
@@ -690,80 +412,55 @@ export async function insertRedemption(redemption: {
   profileId: string;
 }): Promise<void> {
   const database = await getDatabase();
-  await database.runAsync(
-    `INSERT INTO redemptions (id, rewardId, rewardName, cost, redeemedAt, profileId) VALUES (?, ?, ?, ?, ?, ?)`,
-    [redemption.id, redemption.rewardId, redemption.rewardName, redemption.cost, redemption.redeemedAt, redemption.profileId]
-  );
+  await database.insert(schema.redemptions).values(redemption);
 }
 
 // ==================== WALLET OPERATIONS ====================
 
-export interface WalletRow {
-  profileId: string;
-  balance: number;
-}
+export type WalletRow = typeof schema.wallet.$inferSelect;
 
 export async function getWalletBalance(profileId: string): Promise<number> {
   const database = await getDatabase();
-  const result = await database.getFirstAsync<WalletRow>(
-    "SELECT * FROM wallet WHERE profileId = ?", 
-    [profileId]
-  );
-  return result?.balance ?? 0;
+  const result = await database.select().from(schema.wallet).where(eq(schema.wallet.profileId, profileId)).limit(1);
+  return result[0]?.balance ?? 0;
 }
 
 export async function setWalletBalance(balance: number, profileId: string): Promise<void> {
   const database = await getDatabase();
-  await database.runAsync(
-    "UPDATE wallet SET balance = ? WHERE profileId = ?", 
-    [Math.max(0, balance), profileId]
-  );
+  await database.update(schema.wallet).set({ balance: Math.max(0, balance) }).where(eq(schema.wallet.profileId, profileId));
 }
 
 export async function addToWalletBalance(amount: number, profileId: string): Promise<void> {
   const database = await getDatabase();
-  await database.runAsync(
-    "UPDATE wallet SET balance = balance + ? WHERE profileId = ?",
-    [amount, profileId]
-  );
+  await database.update(schema.wallet).set({ balance: sql`${schema.wallet.balance} + ${amount}` }).where(eq(schema.wallet.profileId, profileId));
 }
 
 export async function deductFromWalletBalance(amount: number, profileId: string): Promise<boolean> {
   const database = await getDatabase();
-  const result = await database.getFirstAsync<WalletRow>(
-    "SELECT balance FROM wallet WHERE profileId = ?",
-    [profileId]
-  );
-  
-  if (!result || result.balance < amount) {
-    return false; // Insufficient balance
+  const result = await database.select({ balance: schema.wallet.balance }).from(schema.wallet).where(eq(schema.wallet.profileId, profileId)).limit(1);
+
+  if (!result[0] || result[0].balance < amount) {
+    return false;
   }
-  
-  await database.runAsync(
-    "UPDATE wallet SET balance = balance - ? WHERE profileId = ?",
-    [amount, profileId]
-  );
+
+  await database.update(schema.wallet).set({ balance: sql`${schema.wallet.balance} - ${amount}` }).where(eq(schema.wallet.profileId, profileId));
   return true;
 }
 
 // ==================== ACHIEVEMENT OPERATIONS ====================
 
-export interface AchievementRow {
-  id: string;
-  trophyId: string;
-  unlockedAt: string;
-  profileId: string | null;
-}
+export type AchievementRow = typeof schema.achievements.$inferSelect;
 
 export async function getUnlockedAchievements(profileId?: string): Promise<AchievementRow[]> {
   const database = await getDatabase();
+
   if (profileId) {
-    return await database.getAllAsync<AchievementRow>(
-      "SELECT * FROM achievements WHERE profileId = ? ORDER BY unlockedAt DESC", 
-      [profileId]
-    );
+    return await database.select().from(schema.achievements)
+      .where(eq(schema.achievements.profileId, profileId))
+      .orderBy(desc(schema.achievements.unlockedAt));
   }
-  return await database.getAllAsync<AchievementRow>("SELECT * FROM achievements ORDER BY unlockedAt DESC");
+
+  return await database.select().from(schema.achievements).orderBy(desc(schema.achievements.unlockedAt));
 }
 
 export async function insertAchievement(achievement: {
@@ -773,50 +470,38 @@ export async function insertAchievement(achievement: {
   profileId: string;
 }): Promise<void> {
   const database = await getDatabase();
-  await database.runAsync(
-    "INSERT OR IGNORE INTO achievements (id, trophyId, unlockedAt, profileId) VALUES (?, ?, ?, ?)",
-    [achievement.id, achievement.trophyId, achievement.unlockedAt, achievement.profileId]
-  );
+  await database.insert(schema.achievements).values(achievement).onConflictDoNothing();
 }
 
 export async function isAchievementUnlocked(trophyId: string, profileId?: string): Promise<boolean> {
   const database = await getDatabase();
+
+  const conditions = [eq(schema.achievements.trophyId, trophyId)];
+
   if (profileId) {
-    const result = await database.getFirstAsync<{ count: number }>(
-      "SELECT COUNT(*) as count FROM achievements WHERE trophyId = ? AND profileId = ?",
-      [trophyId, profileId]
-    );
-    return (result?.count ?? 0) > 0;
+    conditions.push(eq(schema.achievements.profileId, profileId));
   }
-  const result = await database.getFirstAsync<{ count: number }>(
-    "SELECT COUNT(*) as count FROM achievements WHERE trophyId = ?",
-    [trophyId]
-  );
-  return (result?.count ?? 0) > 0;
+
+  const result = await database.select({ count: sql<number>`count(*)` })
+    .from(schema.achievements)
+    .where(and(...conditions));
+
+  return (result[0]?.count ?? 0) > 0;
 }
 
 // ==================== USER STATS OPERATIONS ====================
 
-export interface UserStatsRow {
-  profileId: string;
-  totalCompletions: number;
-  longestStreak: number;
-  longestSingleHabitStreak: number;
-  longestSingleHabitId: string | null;
-}
+export type UserStatsRow = typeof schema.userStats.$inferSelect;
 
 export async function getUserStats(profileId: string): Promise<UserStatsRow> {
   const database = await getDatabase();
-  const result = await database.getFirstAsync<UserStatsRow>(
-    "SELECT * FROM user_stats WHERE profileId = ?", 
-    [profileId]
-  );
-  return result || { 
-    profileId, 
-    totalCompletions: 0, 
-    longestStreak: 0, 
-    longestSingleHabitStreak: 0, 
-    longestSingleHabitId: null 
+  const result = await database.select().from(schema.userStats).where(eq(schema.userStats.profileId, profileId)).limit(1);
+  return result[0] || {
+    profileId,
+    totalCompletions: 0,
+    longestStreak: 0,
+    longestSingleHabitStreak: 0,
+    longestSingleHabitId: null,
   };
 }
 
@@ -826,58 +511,40 @@ export async function updateUserStats(
     longestStreak?: number;
     longestSingleHabitStreak?: number;
     longestSingleHabitId?: string | null;
-  }, 
+  },
   profileId: string
 ): Promise<void> {
   const database = await getDatabase();
-  
-  const fields: string[] = [];
-  const values: (string | number | null)[] = [];
-  
-  if (stats.totalCompletions !== undefined) { 
-    fields.push('totalCompletions = totalCompletions + ?'); 
-    values.push(stats.totalCompletions);
+
+  if (stats.totalCompletions !== undefined) {
+    await database.run(sql`UPDATE user_stats SET totalCompletions = totalCompletions + ${stats.totalCompletions} WHERE profileId = ${profileId}`);
   }
-  if (stats.longestStreak !== undefined) { 
-    fields.push('longestStreak = ?'); 
-    values.push(stats.longestStreak);
-  }
-  if (stats.longestSingleHabitStreak !== undefined) { 
-    fields.push('longestSingleHabitStreak = ?'); 
-    values.push(stats.longestSingleHabitStreak);
-  }
-  if (stats.longestSingleHabitId !== undefined) { 
-    fields.push('longestSingleHabitId = ?'); 
-    values.push(stats.longestSingleHabitId);
-  }
-  
-  if (fields.length === 0) return;
-  
-  values.push(profileId);
-  await database.runAsync(
-    `UPDATE user_stats SET ${fields.join(', ')} WHERE profileId = ?`,
-    values
-  );
+
+  const setValues: Partial<typeof schema.userStats.$inferInsert> = {};
+
+  if (stats.longestStreak !== undefined) setValues.longestStreak = stats.longestStreak;
+  if (stats.longestSingleHabitStreak !== undefined) setValues.longestSingleHabitStreak = stats.longestSingleHabitStreak;
+  if (stats.longestSingleHabitId !== undefined) setValues.longestSingleHabitId = stats.longestSingleHabitId;
+
+  if (Object.keys(setValues).length ===0) return;
+
+  await database.update(schema.userStats).set(setValues).where(eq(schema.userStats.profileId, profileId));
 }
 
 // ==================== PURCHASED SKILLS OPERATIONS ====================
 
-export interface PurchasedSkillRow {
-  id: string;
-  skillId: string;
-  profileId: string | null;
-  purchasedAt: string;
-}
+export type PurchasedSkillRow = typeof schema.purchasedSkills.$inferSelect;
 
 export async function getPurchasedSkills(profileId?: string): Promise<PurchasedSkillRow[]> {
   const database = await getDatabase();
+
   if (profileId) {
-    return await database.getAllAsync<PurchasedSkillRow>(
-      "SELECT * FROM purchased_skills WHERE profileId = ? ORDER BY purchasedAt DESC", 
-      [profileId]
-    );
+    return await database.select().from(schema.purchasedSkills)
+      .where(eq(schema.purchasedSkills.profileId, profileId))
+      .orderBy(desc(schema.purchasedSkills.purchasedAt));
   }
-  return await database.getAllAsync<PurchasedSkillRow>("SELECT * FROM purchased_skills ORDER BY purchasedAt DESC");
+
+  return await database.select().from(schema.purchasedSkills).orderBy(desc(schema.purchasedSkills.purchasedAt));
 }
 
 export async function insertPurchasedSkill(skill: {
@@ -888,14 +555,10 @@ export async function insertPurchasedSkill(skill: {
 }): Promise<boolean> {
   const database = await getDatabase();
   try {
-    await database.runAsync(
-      "INSERT INTO purchased_skills (id, skillId, profileId, purchasedAt) VALUES (?, ?, ?, ?)",
-      [skill.id, skill.skillId, skill.profileId, skill.purchasedAt]
-    );
+    await database.insert(schema.purchasedSkills).values(skill);
     return true;
   } catch (error: any) {
-    // UNIQUE constraint violation - skill already purchased
-    if (error.message?.includes('UNIQUE constraint failed')) {
+    if (error.message?.includes("UNIQUE constraint failed")) {
       return false;
     }
     throw error;
@@ -904,9 +567,8 @@ export async function insertPurchasedSkill(skill: {
 
 export async function isSkillPurchased(skillId: string, profileId: string): Promise<boolean> {
   const database = await getDatabase();
-  const result = await database.getFirstAsync<{ count: number }>(
-    "SELECT COUNT(*) as count FROM purchased_skills WHERE skillId = ? AND profileId = ?",
-    [skillId, profileId]
-  );
-  return (result?.count ?? 0) > 0;
+  const result = await database.select({ count: sql<number>`count(*)` })
+    .from(schema.purchasedSkills)
+    .where(and(eq(schema.purchasedSkills.skillId, skillId), eq(schema.purchasedSkills.profileId, profileId)));
+  return (result[0]?.count ?? 0) > 0;
 }

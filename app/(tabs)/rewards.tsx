@@ -8,6 +8,7 @@ import {
   Platform,
   RefreshControl,
   Alert,
+  Modal,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather, Ionicons } from "@expo/vector-icons";
@@ -39,7 +40,11 @@ import {
   applyPenaltyPoints,
   resetStreak,
   isParentProfile,
+  getProfiles,
+  setActiveProfileId,
+  type Profile,
 } from "../../lib/storage";
+import { getActiveProfileId, setActiveProfileId as saveActiveProfileId } from "../../lib/onboarding-storage";
 
 function RewardCard({
   reward,
@@ -250,16 +255,34 @@ export default function RewardsScreen() {
   const [showCelebration, setShowCelebration] = useState(false);
   const [settings, setSettings] = useState({ bonusAmount: 10, penaltyAmount: 10 });
   const [isParent, setIsParent] = useState(false);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [activeProfile, setActiveProfile] = useState<Profile | null>(null);
+  const [profileMenuVisible, setProfileMenuVisible] = useState(false);
   const celebrationScale = useSharedValue(0);
+
+  const handleSwitchProfile = async (profile: Profile) => {
+    try {
+      setActiveProfileId(profile.id);
+      await saveActiveProfileId(profile.id);
+      setActiveProfile(profile);
+      setProfileMenuVisible(false);
+      // Reload data for new profile
+      loadData();
+    } catch (error) {
+      console.error('Error switching profile:', error);
+    }
+  };
 
   const loadData = useCallback(async () => {
     try {
-      const [allRewards, pts, allTrophies, userStats, reminderSettings] = await Promise.all([
+      const [allRewards, pts, allTrophies, userStats, reminderSettings, profiles, activeId] = await Promise.all([
         getRewards(),
         getBalance(),
         getTrophiesWithStatus(),
         getUserStats(),
         getReminderSettings(),
+        getProfiles(),
+        getActiveProfileId(),
       ]);
       setRewards(allRewards);
       setPoints(pts);
@@ -269,6 +292,8 @@ export default function RewardsScreen() {
         bonusAmount: reminderSettings.bonusAmount,
         penaltyAmount: reminderSettings.penaltyAmount,
       });
+      setProfiles(profiles);
+      setActiveProfile(profiles.find(p => p.id === activeId) || null);
       setIsParent(isParentProfile());
     } catch (error) {
       console.error('Error loading rewards data:', error);
@@ -458,11 +483,26 @@ export default function RewardsScreen() {
       )}
 
       <View style={styles.header}>
-        <View>
-          <Text style={styles.screenTitle}>Rewards</Text>
-          <View style={styles.balanceInline}>
-            <Ionicons name="diamond" size={14} color={Colors.accent} />
-            <Text style={styles.balanceInlineText}>{points} points available</Text>
+        <View style={styles.headerLeft}>
+          <Pressable
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setProfileMenuVisible(true);
+            }}
+            style={styles.profileButton}
+          >
+            <View style={styles.profileAvatar}>
+              <Ionicons name={activeProfile?.type === 'parent' ? 'person' : 'happy'} size={18} color="#fff" />
+            </View>
+            <Text style={styles.profileName}>{activeProfile?.name || 'Profile'}</Text>
+            <Ionicons name="chevron-down" size={16} color={Colors.textSecondary} />
+          </Pressable>
+          <View>
+            <Text style={styles.screenTitle}>Rewards</Text>
+            <View style={styles.balanceInline}>
+              <Ionicons name="diamond" size={14} color={Colors.accent} />
+              <Text style={styles.balanceInlineText}>{points} points available</Text>
+            </View>
           </View>
         </View>
         {activeTab === 'rewards' && (
@@ -476,7 +516,7 @@ export default function RewardsScreen() {
           <Ionicons name="add" size={22} color={Colors.primary} />
           <Text style={styles.addButtonText}>Add Reward</Text>
         </Pressable>
-)}
+        )}
       </View>
 
       {isParent && (
@@ -624,6 +664,62 @@ export default function RewardsScreen() {
             }
           />
       )}
+
+      {/* Profile Menu Modal */}
+      <Modal
+        visible={profileMenuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setProfileMenuVisible(false)}
+      >
+        <Pressable
+          style={styles.profileModalOverlay}
+          onPress={() => setProfileMenuVisible(false)}
+        >
+          <View style={styles.profileModalContent}>
+            <View style={styles.profileModalHandle} />
+            <Text style={styles.profileModalTitle}>Switch Profile</Text>
+            
+            {profiles.map((profile) => (
+              <Pressable
+                key={profile.id}
+                onPress={() => handleSwitchProfile(profile)}
+                style={[
+                  styles.profileOption,
+                  activeProfile?.id === profile.id && styles.profileOptionActive,
+                ]}
+              >
+                <View style={[
+                  styles.profileOptionAvatar,
+                  { backgroundColor: profile.type === 'child' ? Colors.primary : Colors.primaryDark },
+                ]}>
+                  <Ionicons name={profile.type === 'child' ? 'happy' : 'person'} size={22} color="#fff" />
+                </View>
+                <View style={styles.profileOptionInfo}>
+                  <Text style={styles.profileOptionName}>{profile.name}</Text>
+                  <Text style={styles.profileOptionType}>{profile.type === 'child' ? 'Child' : 'Parent'}</Text>
+                </View>
+                {activeProfile?.id === profile.id && (
+                  <Ionicons name="checkmark-circle" size={22} color={Colors.primary} />
+                )}
+              </Pressable>
+            ))}
+
+            <View style={styles.profileMenuDivider} />
+
+            <Pressable
+              onPress={() => {
+                setProfileMenuVisible(false);
+                router.push("/settings");
+              }}
+              style={styles.profileMenuItem}
+            >
+              <Ionicons name="settings-outline" size={20} color={Colors.textSecondary} />
+              <Text style={styles.profileMenuItemText}>Manage Profiles</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -641,6 +737,32 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 12,
     gap: 12,
+  },
+  headerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  profileButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    padding: 8,
+    borderRadius: 20,
+    backgroundColor: Colors.surface,
+  },
+  profileAvatar: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: Colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  profileName: {
+    fontSize: 14,
+    fontFamily: "Nunito_600SemiBold",
+    color: Colors.text,
   },
   screenTitle: {
     fontSize: 26,
@@ -979,5 +1101,78 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: "Nunito_500Medium",
     color: Colors.textSecondary,
+  },
+  profileModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  profileModalContent: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+    paddingBottom: 34,
+  },
+  profileModalHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: Colors.border,
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  profileModalTitle: {
+    fontSize: 18,
+    fontFamily: "Nunito_700Bold",
+    color: Colors.text,
+    marginBottom: 16,
+  },
+  profileOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 12,
+    gap: 12,
+    marginBottom: 8,
+  },
+  profileOptionActive: {
+    backgroundColor: Colors.primary + '15',
+  },
+  profileOptionAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profileOptionInfo: {
+    flex: 1,
+  },
+  profileOptionName: {
+    fontSize: 16,
+    fontFamily: "Nunito_600SemiBold",
+    color: Colors.text,
+  },
+  profileOptionType: {
+    fontSize: 13,
+    fontFamily: "Nunito_500Medium",
+    color: Colors.textSecondary,
+  },
+  profileMenuDivider: {
+    height: 1,
+    backgroundColor: Colors.border,
+    marginVertical: 8,
+  },
+  profileMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    gap: 12,
+  },
+  profileMenuItemText: {
+    fontSize: 16,
+    fontFamily: "Nunito_600SemiBold",
+    color: Colors.text,
   },
 });

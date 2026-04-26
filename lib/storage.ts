@@ -347,6 +347,7 @@ export interface HabitCompletion {
   habitName: string;
   coinReward: number;
   completedAt: string;
+  profileId?: string;
 }
 
 export interface Reward {
@@ -365,6 +366,7 @@ export interface RewardRedemption {
   rewardName: string;
   cost: number;
   redeemedAt: string;
+  profileId?: string;
 }
 
 export interface UserStats {
@@ -670,6 +672,15 @@ export async function getCompletions(profileId?: string): Promise<HabitCompletio
 }
 
 export async function getAllProfileCompletions(): Promise<(HabitCompletion & { profileId?: string })[]> {
+  await ensureDbReady();
+  
+  if (useMemoryStore) {
+    return memoryStore.completions.map(c => ({
+      ...c,
+      profileId: c.profileId || undefined,
+    }));
+  }
+  
   try {
     const rows = await db.getAllCompletions();
     return rows.map(r => ({ ...rowToCompletion(r), profileId: r.profileId || undefined }));
@@ -699,24 +710,26 @@ export async function completeHabit(habit: Habit): Promise<HabitCompletion> {
   const targetProfileId = habit.profileId || await getActiveProfileId();
   const today = new Date().toISOString().split('T')[0];
 
-  if (useMemoryStore) {
-    const existing = memoryStore.completions.find(c => 
-      c.habitId === habit.id && 
-      c.completedAt.split('T')[0] === today
-    );
-    if (existing) {
-      throw new Error('ALREADY_COMPLETED_TODAY');
-    }
+    if (useMemoryStore) {
+      const existing = memoryStore.completions.find(c => 
+        c.habitId === habit.id && 
+        c.completedAt.split('T')[0] === today &&
+        c.profileId === targetProfileId
+      );
+      if (existing) {
+        throw new Error('ALREADY_COMPLETED_TODAY');
+      }
 
-    const completion: HabitCompletion = {
-      id: Crypto.randomUUID(),
-      habitId: habit.id,
-      habitName: habit.name,
-      coinReward: habit.coinReward,
-      completedAt: new Date().toISOString(),
-    };
+      const completion: HabitCompletion = {
+        id: Crypto.randomUUID(),
+        habitId: habit.id,
+        habitName: habit.name,
+        coinReward: habit.coinReward,
+        completedAt: new Date().toISOString(),
+        profileId: targetProfileId,
+      };
 
-    memoryStore.completions.push(completion);
+      memoryStore.completions.push(completion);
     memoryStore.walletBalance += habit.coinReward;
     memoryStore.userStats.totalCompletions += 1;
     saveMemoryStore();
@@ -975,12 +988,20 @@ export async function redeemReward(reward: Reward): Promise<RewardRedemption | n
       return null;
     }
 
+    // Verify reward exists and belongs to target profile
+    const rewardExists = memoryStore.rewards.find(r => r.id === reward.id && r.profileId === targetProfileId);
+    if (!rewardExists) {
+      console.warn('[STORAGE] Reward not found or profile mismatch:', reward.id, targetProfileId);
+      return null;
+    }
+
     const redemption: RewardRedemption = {
       id: Crypto.randomUUID(),
       rewardId: reward.id,
       rewardName: reward.name,
       cost: reward.cost,
       redeemedAt: new Date().toISOString(),
+      profileId: targetProfileId,
     };
     
     memoryStore.redemptions.push(redemption);

@@ -60,6 +60,7 @@ export default function SettingsScreen() {
   const [selectedIconId, setSelectedIconId] = useState('primary');
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [showAddParentModal, setShowAddParentModal] = useState(false);
+  const [showAddChildModal, setShowAddChildModal] = useState(false);
   const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
   const [inputValue, setInputValue] = useState('');
 
@@ -293,6 +294,31 @@ export default function SettingsScreen() {
     setInputValue('');
   };
 
+  const handleAddChild = () => {
+    if (profiles.some(p => p.type === 'child')) {
+      Alert.alert("Limit Reached", "Only one child profile is allowed.");
+      return;
+    }
+    setInputValue('');
+    setShowAddChildModal(true);
+  };
+
+  const handleSaveAddChild = async () => {
+    if (!inputValue.trim()) {
+      setShowAddChildModal(false);
+      return;
+    }
+    
+    try {
+      await createProfile(inputValue.trim(), 'child');
+      setProfiles(await getProfiles());
+    } catch (e: any) {
+      Alert.alert("Error", e.message || "Could not add child");
+    }
+    setShowAddChildModal(false);
+    setInputValue('');
+  };
+
   const webTopPadding = Platform.OS === "web" ? 67 : 0;
   const hourOptions = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
   const minuteOptions = Array.from({ length: 60 }, (_, i) => i);
@@ -315,18 +341,29 @@ export default function SettingsScreen() {
         {/* Profiles */}
          <View style={styles.sectionHeaderContainer}>
            <Text style={styles.sectionTitle}>Profiles</Text>
-           <Pressable 
-             onPress={handleAddParent} 
-             style={[
-               styles.addParentButton, 
-               profiles.filter(p => p.type === 'parent').length >= 2 && { opacity: 0.5 }
-             ]}
-             disabled={profiles.filter(p => p.type === 'parent').length >= 2}
-           >
-             <Ionicons name="add-circle" size={20} color={Colors.primary} />
-             <Text style={styles.addParentText}>Add Parent</Text>
-           </Pressable>
-         </View>
+           <View style={styles.profileButtonsContainer}>
+             {!profiles.some(p => p.type === 'child') && (
+               <Pressable 
+                 onPress={handleAddChild} 
+                 style={styles.addChildButton}
+               >
+                 <Ionicons name="add-circle" size={20} color={Colors.primary} />
+                 <Text style={styles.addChildText}>Add Child</Text>
+               </Pressable>
+             )}
+             <Pressable 
+               onPress={handleAddParent} 
+               style={[
+                 styles.addParentButton, 
+                 profiles.filter(p => p.type === 'parent').length >= 2 && { opacity: 0.5 }
+               ]}
+               disabled={profiles.filter(p => p.type === 'parent').length >= 2}
+             >
+               <Ionicons name="add-circle" size={20} color={Colors.primary} />
+               <Text style={styles.addParentText}>Add Parent</Text>
+             </Pressable>
+           </View>
+          </View>
         <Text style={styles.sectionDescription}>
           Manage family profiles. You can rename profiles or remove parents.
         </Text>
@@ -766,6 +803,41 @@ export default function SettingsScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Add Child Modal */}
+      <Modal
+        visible={showAddChildModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowAddChildModal(false)}
+      >
+        <View style={styles.inputModalOverlay}>
+          <View style={styles.inputModalContent}>
+            <Text style={styles.inputModalTitle}>Add Child</Text>
+            <TextInput
+              style={styles.inputModalInput}
+              value={inputValue}
+              onChangeText={setInputValue}
+              autoFocus
+              placeholder="Enter child name"
+            />
+            <View style={styles.inputModalButtons}>
+              <Pressable
+                style={[styles.inputModalButton, styles.inputModalButtonCancel]}
+                onPress={() => setShowAddChildModal(false)}
+              >
+                <Text style={styles.inputModalButtonCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.inputModalButton, styles.inputModalButtonConfirm]}
+                onPress={handleSaveAddChild}
+              >
+                <Text style={styles.inputModalButtonConfirmText}>Add</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -823,6 +895,25 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   addParentText: {
+    fontSize: 14,
+    fontFamily: "Nunito_700Bold",
+    color: Colors.primary,
+  },
+  profileButtonsContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  addChildButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: Colors.primary + "15",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  addChildText: {
     fontSize: 14,
     fontFamily: "Nunito_700Bold",
     color: Colors.primary,
