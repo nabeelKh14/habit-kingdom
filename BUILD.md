@@ -4,26 +4,83 @@ This document explains how to build standalone APKs for Android.
 
 ## Quick Summary
 
-| APK Type | Metro Required | JS Bundle | Size | Use Case |
-|----------|---------------|-----------|------|----------|
-| **Release** | ❌ No | ✅ Embedded | ~100MB | **Recommended** - Works standalone |
-| Debug | ✅ Yes | ❌ Not embedded | ~200MB | Development only |
+| APK Type | Metro Required | JS Bundle | Size | Build Time | Use Case |
+|----------|---------------|-----------|------|------------|----------|
+| **Release (Optimized)** | ❌ No | ✅ Embedded | ~39MB | ~10 min | **Recommended** - Works standalone |
+| Release (All arch) | ❌ No | ✅ Embedded | ~100MB | ~40 min | If supporting older devices |
+| Debug | ✅ Yes | ❌ Not embedded | ~200MB | ~5 min | Development only |
 
-**For testing/distribution: Always use the Release APK.**
+**For testing/distribution: Always use the Optimized Release APK (arm64-v8a only).**
+
+### 🚀 Quickest Build (Windows)
+```powershell
+$env:JAVA_HOME="C:\Program Files\Java\jdk-17"
+cd D:\kh\android
+.\gradlew.bat assembleRelease --no-daemon
+```
+Output: `D:\kh\android\app\build\outputs\apk\release\app-release.apk`
 
 ---
 
 ## Fast Build Commands
 
-```bash
-# Build standalone release APK (recommended)
-npm run build:android:release
+### Quick Build (Windows - Recommended)
+```powershell
+$env:JAVA_HOME="C:\Program Files\Java\jdk-17"
+cd android
+.\gradlew.bat assembleRelease --no-daemon
+```
+**Output:** `android\app\build\outputs\apk\release\app-release.apk` (~39 MB)
 
-# Build debug APK (requires Metro running)
-npm run build:android:debug
+### Copy to Project Root
+```powershell
+Copy-Item "android\app\build\outputs\apk\release\app-release.apk" -Destination "kidhabit-release.apk"
 ```
 
-**Output:** `habit-kingdom-release.apk` (in project root)
+---
+
+## Build Optimization Tips
+
+### Current Optimizations (Applied)
+| Optimization | Impact | Status |
+|--------------|--------|--------|
+| Build only arm64-v8a (drops armeabi-v7a, x86, x86_64) | **~75% faster** (~10 min vs ~40 min) | ✅ Configured |
+| Gradle build cache enabled | Reuses cached task outputs | ✅ Enabled |
+| Configuration cache enabled | Skips config phase when unchanged | ✅ Enabled |
+| Parallel builds enabled | Uses multiple CPU cores | ✅ Enabled |
+| PNG crunching disabled | Skips image optimization | ✅ Enabled |
+
+### Build Speed Tips
+| Tip | Impact |
+|-----|--------|
+| **Don't run `gradlew clean`** unless necessary (causes full rebuild) | Avoids +30 min |
+| **Close other apps** to free RAM (prevents swapping) | Prevents slowdowns |
+| **Use `--no-daemon`** flag to avoid daemon issues | Stable builds |
+| **Only rebuild when JS/native code changes** (pure asset changes don't need rebuild) | Saves time |
+| **Increment `versionCode`** in `android/app/build.gradle` for new builds | Best practice |
+
+### Architecture Note
+The build is configured to target **arm64-v8a only** (line 41 in `gradle.properties` + `abiFilters` in `app/build.gradle`). This covers **95%+ of modern Android devices** (2017+).
+
+To build for all architectures (if needed for older devices):
+```powershell
+cd android
+.\gradlew.bat assembleRelease -PreactNativeArchitectures=arm64-v8a,armeabi-v7a,x86,x86_64 --no-daemon
+```
+
+### First Build vs Subsequent Builds
+- **First build after clean:** ~10-15 minutes (compiles native modules)
+- **Subsequent builds (JS changes only):** ~2-3 minutes (incremental)
+- **No changes:** ~10 seconds (cached)
+
+---
+
+## Debug Build (Requires Metro)
+```powershell
+cd android
+.\gradlew.bat assembleDebug --no-daemon
+```
+**Note:** Debug APKs require Metro bundler running. JS bundle is NOT embedded.
 
 ## Prerequisites
 
@@ -78,18 +135,29 @@ source ~/.zshrc
 
 #### 1. Install Java 17
 Download from https://adoptium.net/temurin/releases/?version=17
+- **Or use Oracle JDK:** https://www.oracle.com/java/technologies/downloads/#java17
 
-#### 2. Set JAVA_HOME
-```cmd
-set "JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot"
+#### 2. Set JAVA_HOME (Choose your installation path)
+```powershell
+# If using Oracle JDK (recommended - path used in this project):
+$env:JAVA_HOME="C:\Program Files\Java\jdk-17"
+
+# If using Eclipse Adoptium:
+$env:JAVA_HOME="C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot"
 ```
 
 #### 3. Install Android SDK
-Download from https://developer.android.com/studio
+Download Android Studio from https://developer.android.com/studio (includes SDK)
 
 #### 4. Set ANDROID_HOME
-```cmd
-set "ANDROID_HOME=C:\Users\YourUsername\AppData\Local\Android\Sdk"
+```powershell
+$env:ANDROID_HOME="C:\Users\$env:USERNAME\AppData\Local\Android\Sdk"
+```
+
+**Verify setup:**
+```powershell
+java -version
+adb version
 ```
 
 ---
@@ -209,8 +277,22 @@ ls $ANDROID_HOME
 ## Key Configuration Files
 
 - `android/gradle/wrapper/gradle-wrapper.properties` - Gradle version (9.0)
-- `android/gradle.properties` - Build properties (New Architecture enabled)
-- `android/app/build.gradle` - App build configuration
+- `android/gradle.properties` - Build properties (New Architecture enabled, `reactNativeArchitectures=arm64-v8a`)
+- `android/app/build.gradle` - App build configuration (includes `abiFilters "arm64-v8a"` in `defaultConfig`)
+
+### Configuration Applied (for fast builds)
+
+**`android/gradle.properties` (line 41):**
+```
+reactNativeArchitectures=arm64-v8a
+```
+
+**`android/app/build.gradle` (in `defaultConfig`):**
+```groovy
+ndk { abiFilters "arm64-v8a" }
+```
+
+This restricts native builds to arm64-v8a only (covers 95%+ of modern devices), cutting build time by ~75%.
 
 ---
 

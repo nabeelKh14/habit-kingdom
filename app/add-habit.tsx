@@ -55,7 +55,7 @@ export default function AddHabitScreen() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [selectedProfileId, setSelectedProfileId] = useState<string>('');
+  const [selectedProfileId, setSelectedProfileId] = useState<string | undefined>(undefined);
 
   // Load habit data for edit mode
   useEffect(() => {
@@ -67,7 +67,7 @@ export default function AddHabitScreen() {
       const allProfiles = await getProfiles();
       setProfiles(allProfiles);
       const currentActiveProfileId = await getActiveProfileId();
-      let initialProfileId = currentActiveProfileId;
+      let initialProfileId = currentActiveProfileId || undefined;
 
       if (isEditMode) {
         const habits = await getHabits();
@@ -83,7 +83,7 @@ export default function AddHabitScreen() {
           if (habit.dayOfMonth) setDayOfMonth(habit.dayOfMonth);
           setNotificationsEnabled(habit.notificationsEnabled !== undefined ? habit.notificationsEnabled : true);
           if (habit.notificationTime) setNotificationTime(habit.notificationTime);
-          if (habit.profileId) initialProfileId = habit.profileId;
+          if (habit.profileId && habit.profileId !== '') initialProfileId = habit.profileId;
         }
       }
       setSelectedProfileId(initialProfileId);

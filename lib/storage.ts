@@ -20,9 +20,10 @@ const memoryStore = {
   rewards: [] as Reward[],
   redemptions: [] as RewardRedemption[],
   unlockedAchievements: [] as UnlockedAchievement[],
-  userStats: { totalCompletions: 0, longestStreak: 0, longestSingleHabitStreak: 0, longestSingleHabitId: '', profileId: 'default' } as UserStats,
-  walletBalance: 0,
-  purchasedSkills: [] as string[],
+  // Per-profile storage using Maps
+  walletBalances: new Map<string, number>(),  // profileId -> balance
+  userStatsMap: new Map<string, UserStats>(),    // profileId -> stats
+  purchasedSkillsMap: new Map<string, string[]>(), // profileId -> skills[]
   activeProfileId: 'default',
 };
 
@@ -36,9 +37,10 @@ function saveMemoryStore(): void {
       rewards: memoryStore.rewards,
       redemptions: memoryStore.redemptions,
       unlockedAchievements: memoryStore.unlockedAchievements,
-      userStats: memoryStore.userStats,
-      walletBalance: memoryStore.walletBalance,
-      purchasedSkills: memoryStore.purchasedSkills,
+      // Serialize Maps to plain objects for storage
+      walletBalances: Object.fromEntries(memoryStore.walletBalances.entries()),
+      userStatsMap: Object.fromEntries(memoryStore.userStatsMap.entries()),
+      purchasedSkillsMap: Object.fromEntries(memoryStore.purchasedSkillsMap.entries()),
       activeProfileId: memoryStore.activeProfileId,
     };
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(data));
@@ -59,9 +61,16 @@ function loadMemoryStore(): boolean {
       memoryStore.rewards = data.rewards || [];
       memoryStore.redemptions = data.redemptions || [];
       memoryStore.unlockedAchievements = data.unlockedAchievements || [];
-      memoryStore.userStats = data.userStats || memoryStore.userStats;
-      memoryStore.walletBalance = data.walletBalance || 0;
-      memoryStore.purchasedSkills = data.purchasedSkills || [];
+      // Deserialize Maps from stored objects
+      memoryStore.walletBalances = data.walletBalances 
+        ? new Map(Object.entries(data.walletBalances)) 
+        : new Map<string, number>();
+      memoryStore.userStatsMap = data.userStatsMap 
+        ? new Map(Object.entries(data.userStatsMap)) 
+        : new Map<string, UserStats>();
+      memoryStore.purchasedSkillsMap = data.purchasedSkillsMap 
+        ? new Map(Object.entries(data.purchasedSkillsMap)) 
+        : new Map<string, string[]>();
       memoryStore.activeProfileId = data.activeProfileId || 'default';
       activeProfileId = memoryStore.activeProfileId;
       console.log('[STORAGE] Loaded from sessionStorage');
@@ -290,6 +299,15 @@ export async function createProfile(name: string, type: 'child' | 'parent'): Pro
     
     if (useMemoryStore) {
       memoryStore.profiles.push(profile);
+      // Initialize per-profile storage
+      memoryStore.walletBalances.set(profile.id, 0);
+      memoryStore.userStatsMap.set(profile.id, {
+        totalCompletions: 0,
+        longestStreak: 0,
+        longestSingleHabitStreak: 0,
+        longestSingleHabitId: null,
+      });
+      memoryStore.purchasedSkillsMap.set(profile.id, []);
       saveMemoryStore();
       console.log('[STORAGE] Created profile in memory:', profile.name);
     } else {
@@ -334,6 +352,27 @@ export async function removeProfile(id: string): Promise<void> {
     if (id === 'default') {
       throw new Error('Cannot delete the default profile');
     }
+    
+    if (useMemoryStore) {
+      // Clean up all profile-related data from memory store
+      memoryStore.profiles = memoryStore.profiles.filter(p => p.id !== id);
+      memoryStore.walletBalances.delete(id);
+      memoryStore.userStatsMap.delete(id);
+      memoryStore.purchasedSkillsMap.delete(id);
+      // Remove associated habits, completions, rewards, redemptions
+      memoryStore.habits = memoryStore.habits.filter(h => h.profileId !== id);
+      memoryStore.completions = memoryStore.completions.filter(c => c.profileId !== id);
+      memoryStore.rewards = memoryStore.rewards.filter(r => r.profileId !== id);
+      memoryStore.redemptions = memoryStore.redemptions.filter(r => r.profileId !== id);
+      // If removing active profile, switch to first available
+      if (activeProfileId === id) {
+        activeProfileId = memoryStore.profiles.length > 0 ? memoryStore.profiles[0].id : 'default';
+        memoryStore.activeProfileId = activeProfileId;
+      }
+      saveMemoryStore();
+      return;
+    }
+    
     await db.removeProfile(id);
   } catch (error) {
     console.error('[ERROR] removeProfile failed:', error);
@@ -585,14 +624,18 @@ export async function updateHabit(habit: Partial<Pick<Habit, 'name' | 'icon' | '
       throw new Error('Habit ID is required');
     }
     
-    // Profile isolation check
+    // Profile isolation check - use the habit's profileId if provided, otherwise check active profile
     if (isEnabled('PROFILE_ISOLATION_CHECKS')) {
       const existing = await db.getHabitById(habit.id);
       if (!existing) {
         throw new Error('Habit not found');
       }
-      if (existing.profileId !== await getActiveProfileId()) {
-        throw new Error('UNAUTHORIZED: Habit belongs to another profile');
+      const targetProfileId = habit.profileId || await getActiveProfileId();
+      if (existing.profileId && existing.profileId !== targetProfileId) {
+        // Allow if we're updating to a new profileId
+        if (!habit.profileId || habit.profileId === existing.profileId) {
+          throw new Error('UNAUTHORIZED: Habit belongs to another profile');
+        }
       }
     }
     
@@ -608,7 +651,7 @@ export async function updateHabit(habit: Partial<Pick<Habit, 'name' | 'icon' | '
     if (habit.dayOfMonth !== undefined) updateData.dayOfMonth = habit.dayOfMonth;
     if (habit.notificationsEnabled !== undefined) updateData.notificationsEnabled = habit.notificationsEnabled ? 1 : 0;
     if (habit.notificationTime !== undefined) updateData.notificationTime = habit.notificationTime;
-    if (habit.profileId !== undefined) updateData.profileId = habit.profileId;
+    if (habit.profileId !== undefined && habit.profileId !== '') updateData.profileId = habit.profileId;
     
     await db.updateHabit(updateData);
   } catch (error) {
@@ -710,15 +753,15 @@ export async function getAllProfileCompletions(): Promise<(HabitCompletion & { p
   }
 }
 
+// Atomic habit completion with duplicate prevention
 export async function getTodayCompletions(): Promise<HabitCompletion[]> {
   const completions = await getCompletions();
-  const today = new Date().toDateString();
+  const today = new Date().toISOString().split('T')[0];
   return completions.filter(
-    (c) => new Date(c.completedAt).toDateString() === today
+    (c) => c.completedAt.split('T')[0] === today
   );
 }
 
-// Atomic habit completion with duplicate prevention
 export async function completeHabit(habit: Habit): Promise<HabitCompletion> {
   try {
     validateHabitInput(habit);
@@ -728,6 +771,9 @@ export async function completeHabit(habit: Habit): Promise<HabitCompletion> {
   }
 
   const targetProfileId = habit.profileId || await getActiveProfileId();
+  if (!targetProfileId) {
+    throw new Error('No active profile found. Please select a profile.');
+  }
   const today = new Date().toISOString().split('T')[0];
 
     if (useMemoryStore) {
@@ -750,12 +796,22 @@ export async function completeHabit(habit: Habit): Promise<HabitCompletion> {
       };
 
       memoryStore.completions.push(completion);
-    memoryStore.walletBalance += habit.coinReward;
-    memoryStore.userStats.totalCompletions += 1;
-    saveMemoryStore();
-    console.log('[STORAGE] Completed habit in memory:', habit.name);
-    return completion;
-  }
+      // Update per-profile wallet balance
+      const currentBalance = memoryStore.walletBalances.get(targetProfileId) || 0;
+      memoryStore.walletBalances.set(targetProfileId, currentBalance + habit.coinReward);
+      // Update per-profile user stats
+      const stats = memoryStore.userStatsMap.get(targetProfileId) || {
+        totalCompletions: 0,
+        longestStreak: 0,
+        longestSingleHabitStreak: 0,
+        longestSingleHabitId: null,
+      };
+      stats.totalCompletions += 1;
+      memoryStore.userStatsMap.set(targetProfileId, stats);
+      saveMemoryStore();
+      console.log('[STORAGE] Completed habit in memory:', habit.name);
+      return completion;
+    }
 
   return await withTransaction(async (database) => {
     // Check for duplicate completion
@@ -805,16 +861,28 @@ export async function uncompleteHabit(habitId: string, profileId?: string): Prom
   const today = new Date().toISOString().split('T')[0];
 
   if (useMemoryStore) {
+    const targetProfileId = profileId || await getActiveProfileId();
     const idx = memoryStore.completions.findIndex(c => 
       c.habitId === habitId && 
-      c.completedAt.split('T')[0] === today
+      c.completedAt.split('T')[0] === today &&
+      c.profileId === targetProfileId
     );
     
     if (idx !== -1) {
       const completion = memoryStore.completions[idx];
       memoryStore.completions.splice(idx, 1);
-      memoryStore.walletBalance = Math.max(0, memoryStore.walletBalance - completion.coinReward);
-      memoryStore.userStats.totalCompletions = Math.max(0, memoryStore.userStats.totalCompletions - 1);
+      // Update per-profile wallet balance
+      const currentBalance = memoryStore.walletBalances.get(targetProfileId) || 0;
+      memoryStore.walletBalances.set(targetProfileId, Math.max(0, currentBalance - completion.coinReward));
+      // Update per-profile user stats
+      const stats = memoryStore.userStatsMap.get(targetProfileId) || {
+        totalCompletions: 0,
+        longestStreak: 0,
+        longestSingleHabitStreak: 0,
+        longestSingleHabitId: null,
+      };
+      stats.totalCompletions = Math.max(0, stats.totalCompletions - 1);
+      memoryStore.userStatsMap.set(targetProfileId, stats);
       saveMemoryStore();
     }
     return;
@@ -1004,7 +1072,8 @@ export async function redeemReward(reward: Reward): Promise<RewardRedemption | n
   const targetProfileId = reward.profileId || await getActiveProfileId();
 
   if (useMemoryStore) {
-    if (memoryStore.walletBalance < reward.cost) {
+    const currentBalance = memoryStore.walletBalances.get(targetProfileId) || 0;
+    if (currentBalance < reward.cost) {
       return null;
     }
 
@@ -1025,7 +1094,7 @@ export async function redeemReward(reward: Reward): Promise<RewardRedemption | n
     };
     
     memoryStore.redemptions.push(redemption);
-    memoryStore.walletBalance -= reward.cost;
+    memoryStore.walletBalances.set(targetProfileId, currentBalance - reward.cost);
     saveMemoryStore();
     console.log('[STORAGE] Redeemed reward in memory:', reward.name);
     return redemption;
@@ -1066,14 +1135,15 @@ export async function getBalance(profileId?: string): Promise<number> {
   await ensureDbReady();
   
   if (useMemoryStore) {
-    return memoryStore.walletBalance;
+    const targetId = profileId || activeProfileId || 'default';
+    return memoryStore.walletBalances.get(targetId) || 0;
   }
   
   try {
     return await db.getWalletBalance(profileId || await getActiveProfileId());
   } catch (error) {
     console.error('[ERROR] getBalance failed:', error);
-    return useMemoryStore ? memoryStore.walletBalance : 0;
+    return useMemoryStore ? (memoryStore.walletBalances.get(activeProfileId || 'default') || 0) : 0;
   }
 }
 
@@ -1088,7 +1158,8 @@ export async function setBalance(balance: number, profileId?: string): Promise<v
   }
   
   if (useMemoryStore) {
-    memoryStore.walletBalance = balance;
+    const targetId = profileId || activeProfileId || 'default';
+    memoryStore.walletBalances.set(targetId, balance);
     saveMemoryStore();
     return;
   }
@@ -1277,7 +1348,19 @@ export async function getUserStats(profileId?: string): Promise<UserStats> {
   await ensureDbReady();
   
   if (useMemoryStore) {
-    return { ...memoryStore.userStats };
+    const targetId = profileId || activeProfileId || 'default';
+    const stats = memoryStore.userStatsMap.get(targetId);
+    if (stats) {
+      return { ...stats };
+    } else {
+      // Return default stats if not found
+      return {
+        totalCompletions: 0,
+        longestStreak: 0,
+        longestSingleHabitStreak: 0,
+        longestSingleHabitId: null,
+      };
+    }
   }
   
   try {
@@ -1346,10 +1429,13 @@ export async function checkAndUnlockAchievements(
   habit: Habit,
   currentStreak: number
 ): Promise<Trophy[]> {
-  const profileId = await getActiveProfileId();
+  const profileId = habit.profileId || await getActiveProfileId();
+  if (!profileId) {
+    throw new Error('No profile ID found for achievement check');
+  }
   const unlockedAchievements = await getUnlockedAchievements();
   const unlockedIds = new Set(unlockedAchievements.map((u) => u.trophyId));
-  const stats = await getUserStats();
+  const stats = await getUserStats(profileId);
   const newUnlocked: Trophy[] = [];
 
   return await withTransaction(async (database) => {
@@ -1611,7 +1697,9 @@ export async function getPurchasedSkillIds(): Promise<string[]> {
   await ensureDbReady();
   
   if (useMemoryStore) {
-    return [...memoryStore.purchasedSkills];
+    const targetId = activeProfileId || 'default';
+    const skills = memoryStore.purchasedSkillsMap.get(targetId);
+    return skills ? [...skills] : [];
   }
   
   try {
@@ -1628,8 +1716,11 @@ export async function savePurchasedSkill(skillId: string): Promise<boolean> {
   await ensureDbReady();
   
   if (useMemoryStore) {
-    if (!memoryStore.purchasedSkills.includes(skillId)) {
-      memoryStore.purchasedSkills.push(skillId);
+    const targetId = await getActiveProfileId();
+    const skills = memoryStore.purchasedSkillsMap.get(targetId) || [];
+    if (!skills.includes(skillId)) {
+      skills.push(skillId);
+      memoryStore.purchasedSkillsMap.set(targetId, skills);
       saveMemoryStore();
     }
     return true;
@@ -1711,25 +1802,39 @@ export async function restoreStreakWithCoins(cost?: number): Promise<{ success: 
 }
 
 export async function addBonusPoints(amount: number, profileId?: string): Promise<void> {
-  requireParentProfile();
   validateAmount(amount);
   
   const targetProfile = profileId || await getActiveProfileId();
+  
+  if (useMemoryStore) {
+    const currentBalance = memoryStore.walletBalances.get(targetProfile) || 0;
+    memoryStore.walletBalances.set(targetProfile, currentBalance + amount);
+    saveMemoryStore();
+    return;
+  }
+  
   await db.addToWalletBalance(amount, targetProfile);
 }
 
 export async function applyPenaltyPoints(amount: number, profileId?: string): Promise<void> {
-  requireParentProfile();
   validateAmount(amount);
   
   const targetProfile = profileId || await getActiveProfileId();
+  
+  if (useMemoryStore) {
+    const currentBalance = memoryStore.walletBalances.get(targetProfile) || 0;
+    const actualDeduction = Math.min(amount, currentBalance);
+    memoryStore.walletBalances.set(targetProfile, currentBalance - actualDeduction);
+    saveMemoryStore();
+    return;
+  }
+  
   const currentBalance = await db.getWalletBalance(targetProfile);
   const actualDeduction = Math.min(amount, currentBalance);
   await db.setWalletBalance(currentBalance - actualDeduction, targetProfile);
 }
 
 export async function resetStreak(profileId?: string): Promise<void> {
-  requireParentProfile();
   
   const targetProfile = profileId || await getActiveProfileId();
   await db.updateUserStats({

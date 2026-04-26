@@ -341,34 +341,69 @@ export default function SettingsScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* Profiles */}
-         <View style={styles.sectionHeaderContainer}>
-           <Text style={styles.sectionTitle}>Profiles</Text>
-           <View style={styles.profileButtonsContainer}>
-             {!profiles.some(p => p.type === 'child') && (
-               <Pressable 
-                 onPress={handleAddChild} 
-                 style={styles.addChildButton}
-               >
-                 <Ionicons name="add-circle" size={20} color={Colors.primary} />
-                 <Text style={styles.addChildText}>Add Child</Text>
-               </Pressable>
-             )}
-             <Pressable 
-               onPress={handleAddParent} 
-               style={[
-                 styles.addParentButton, 
-                 profiles.filter(p => p.type === 'parent').length >= 2 && { opacity: 0.5 }
-               ]}
-               disabled={profiles.filter(p => p.type === 'parent').length >= 2}
-             >
-               <Ionicons name="add-circle" size={20} color={Colors.primary} />
-               <Text style={styles.addParentText}>Add Parent</Text>
-             </Pressable>
+          <View style={styles.sectionHeaderContainer}>
+            <Text style={styles.sectionTitle}>Profiles</Text>
+            <View style={styles.profileButtonsContainer}>
+              {!profiles.some(p => p.type === 'child') && (
+                <Pressable 
+                  onPress={handleAddChild} 
+                  style={styles.addChildButton}
+                >
+                  <Ionicons 
+                    name="add-circle" 
+                    size={20} 
+                    color={Colors.primary} 
+                  />
+                  <Text style={styles.addChildText}>Add Child</Text>
+                </Pressable>
+              )}
+              <Pressable 
+                onPress={handleAddParent} 
+                style={[
+                  styles.addParentButton, 
+                  profiles.filter(p => p.type === 'parent').length >= 2 && { opacity: 0.5 }
+                ]}
+                disabled={profiles.filter(p => p.type === 'parent').length >= 2}
+              >
+                <Ionicons 
+                  name="add-circle" 
+                  size={20} 
+                  color={profiles.filter(p => p.type === 'parent').length >= 2 ? Colors.textLight : Colors.primary} 
+                />
+                <Text style={[
+                  styles.addParentText,
+                  profiles.filter(p => p.type === 'parent').length >= 2 && { color: Colors.textLight }
+                ]}>Add Parent</Text>
+              </Pressable>
+            </View>
            </View>
-          </View>
         <Text style={styles.sectionDescription}>
           Manage family profiles. You can rename profiles or remove parents.
         </Text>
+        <Pressable 
+          onPress={() => {
+            Alert.alert(
+              "Reset Onboarding",
+              "This will reset the onboarding status. The app will show onboarding on next launch.",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Reset",
+                  style: "destructive",
+                  onPress: async () => {
+                    const { resetOnboarding } = await import("../lib/onboarding-storage");
+                    await resetOnboarding();
+                    Alert.alert("Reset Complete", "Onboarding will show on next app launch.");
+                  }
+                }
+              ]
+            );
+          }}
+          style={styles.resetOnboardingButton}
+        >
+          <Ionicons name="refresh-circle" size={20} color={Colors.error} />
+          <Text style={styles.resetOnboardingText}>Reset Onboarding</Text>
+        </Pressable>
 
         <View style={styles.profilesList}>
           {profiles.map((profile, index) => (
@@ -919,6 +954,21 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: "Nunito_700Bold",
     color: Colors.primary,
+  },
+  resetOnboardingButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    backgroundColor: Colors.error + "15",
+    marginTop: 8,
+  },
+  resetOnboardingText: {
+    fontSize: 14,
+    fontFamily: "Nunito_700Bold",
+    color: Colors.error,
   },
   profilesList: {
     backgroundColor: Colors.surface,

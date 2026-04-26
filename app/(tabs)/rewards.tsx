@@ -9,6 +9,7 @@ import {
   RefreshControl,
   Alert,
   Modal,
+  ScrollView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather, Ionicons } from "@expo/vector-icons";
@@ -357,13 +358,9 @@ export default function RewardsScreen() {
   };
 
   const handleBonus = () => {
-    if (!isParent) {
-      Alert.alert("Access Denied", "Only parent profiles can give bonus points.");
-      return;
-    }
     Alert.prompt(
       "Give Bonus Points",
-      "Enter amount of points to add:",
+      `Enter amount of points to add to ${activeProfile?.name}'s account:`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -379,7 +376,7 @@ export default function RewardsScreen() {
               return;
             }
             try {
-              await addBonusPoints(num);
+              await addBonusPoints(num, activeProfile?.id);
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
               loadData();
             } catch (error: any) {
@@ -395,13 +392,9 @@ export default function RewardsScreen() {
   };
 
   const handlePenalty = () => {
-    if (!isParent) {
-      Alert.alert("Access Denied", "Only parent profiles can deduct points.");
-      return;
-    }
     Alert.prompt(
       "Deduct Points",
-      "Enter amount of points to deduct:",
+      `Enter amount of points to deduct from ${activeProfile?.name}'s account:`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -418,7 +411,7 @@ export default function RewardsScreen() {
               return;
             }
             try {
-              await applyPenaltyPoints(num);
+              await applyPenaltyPoints(num, activeProfile?.id);
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
               loadData();
             } catch (error: any) {
@@ -434,13 +427,9 @@ export default function RewardsScreen() {
   };
 
   const handleResetStreak = () => {
-    if (!isParent) {
-      Alert.alert("Access Denied", "Only parent profiles can reset streaks.");
-      return;
-    }
     Alert.alert(
       "Reset Streak",
-      "Are you sure you want to reset the streak? This cannot be undone.",
+      `Are you sure you want to reset ${activeProfile?.name}'s streak? This cannot be undone.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -448,7 +437,7 @@ export default function RewardsScreen() {
           style: "destructive",
           onPress: async () => {
             try {
-              await resetStreak();
+              await resetStreak(activeProfile?.id);
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
               loadData();
             } catch (error: any) {
@@ -482,21 +471,25 @@ export default function RewardsScreen() {
         </Animated.View>
       )}
 
+      {/* Profile Selector - Full width above header */}
+      <View style={styles.profileSelectorContainer}>
+        <Pressable
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            setProfileMenuVisible(true);
+          }}
+          style={styles.profileButtonFullWidth}
+        >
+          <View style={styles.profileAvatar}>
+            <Ionicons name={activeProfile?.type === 'parent' ? 'person' : 'happy'} size={18} color="#fff" />
+          </View>
+          <Text style={styles.profileName}>{activeProfile?.name || 'Profile'}</Text>
+          <Ionicons name="chevron-down" size={16} color={Colors.textSecondary} />
+        </Pressable>
+      </View>
+
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <Pressable
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              setProfileMenuVisible(true);
-            }}
-            style={styles.profileButton}
-          >
-            <View style={styles.profileAvatar}>
-              <Ionicons name={activeProfile?.type === 'parent' ? 'person' : 'happy'} size={18} color="#fff" />
-            </View>
-            <Text style={styles.profileName}>{activeProfile?.name || 'Profile'}</Text>
-            <Ionicons name="chevron-down" size={16} color={Colors.textSecondary} />
-          </Pressable>
           <View>
             <Text style={styles.screenTitle}>Rewards</Text>
             <View style={styles.balanceInline}>
@@ -519,8 +512,7 @@ export default function RewardsScreen() {
         )}
       </View>
 
-      {isParent && (
-        <View style={styles.adminActions}>
+      <View style={styles.adminActions}>
           <Pressable onPress={handleBonus} style={[styles.adminButton, { backgroundColor: Colors.success + "15" }]}>
             <Ionicons name="add-circle" size={18} color={Colors.success} />
             <Text style={[styles.adminButtonText, { color: Colors.success }]}>Bonus</Text>
@@ -534,7 +526,6 @@ export default function RewardsScreen() {
             <Text style={[styles.adminButtonText, { color: Colors.warning }]}>Reset Streak</Text>
           </Pressable>
         </View>
-      )}
 
       {/* Tab Selector */}
       <View style={styles.tabContainer}>
@@ -669,7 +660,7 @@ export default function RewardsScreen() {
       <Modal
         visible={profileMenuVisible}
         transparent
-        animationType="fade"
+        animationType="slide"
         onRequestClose={() => setProfileMenuVisible(false)}
       >
         <Pressable
@@ -680,30 +671,32 @@ export default function RewardsScreen() {
             <View style={styles.profileModalHandle} />
             <Text style={styles.profileModalTitle}>Switch Profile</Text>
             
-            {profiles.map((profile) => (
-              <Pressable
-                key={profile.id}
-                onPress={() => handleSwitchProfile(profile)}
-                style={[
-                  styles.profileOption,
-                  activeProfile?.id === profile.id && styles.profileOptionActive,
-                ]}
-              >
-                <View style={[
-                  styles.profileOptionAvatar,
-                  { backgroundColor: profile.type === 'child' ? Colors.primary : Colors.primaryDark },
-                ]}>
-                  <Ionicons name={profile.type === 'child' ? 'happy' : 'person'} size={22} color="#fff" />
-                </View>
-                <View style={styles.profileOptionInfo}>
-                  <Text style={styles.profileOptionName}>{profile.name}</Text>
-                  <Text style={styles.profileOptionType}>{profile.type === 'child' ? 'Child' : 'Parent'}</Text>
-                </View>
-                {activeProfile?.id === profile.id && (
-                  <Ionicons name="checkmark-circle" size={22} color={Colors.primary} />
-                )}
-              </Pressable>
-            ))}
+            <ScrollView style={{ maxHeight: '80%' }}>
+              {profiles.map((profile) => (
+                <Pressable
+                  key={profile.id}
+                  onPress={() => handleSwitchProfile(profile)}
+                  style={[
+                    styles.profileOption,
+                    activeProfile?.id === profile.id && styles.profileOptionActive,
+                  ]}
+                >
+                  <View style={[
+                    styles.profileOptionAvatar,
+                    { backgroundColor: profile.type === 'child' ? Colors.primary : Colors.primaryDark },
+                  ]}>
+                    <Ionicons name={profile.type === 'child' ? 'happy' : 'person'} size={22} color="#fff" />
+                  </View>
+                  <View style={styles.profileOptionInfo}>
+                    <Text style={styles.profileOptionName}>{profile.name}</Text>
+                    <Text style={styles.profileOptionType}>{profile.type === 'child' ? 'Child' : 'Parent'}</Text>
+                  </View>
+                  {activeProfile?.id === profile.id && (
+                    <Ionicons name="checkmark-circle" size={22} color={Colors.primary} />
+                  )}
+                </Pressable>
+              ))}
+            </ScrollView>
 
             <View style={styles.profileMenuDivider} />
 
@@ -1174,5 +1167,20 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: "Nunito_600SemiBold",
     color: Colors.text,
+  },
+  profileSelectorContainer: {
+    paddingHorizontal: 20,
+    marginBottom: 12,
+  },
+  profileButtonFullWidth: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
   },
 });

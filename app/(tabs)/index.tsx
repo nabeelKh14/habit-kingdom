@@ -424,11 +424,36 @@ export default function HabitsScreen() {
 
   const handleComplete = async (habit: Habit) => {
     try {
-      await completeHabit(habit);
+      console.log('[COMPLETE] Starting completion for habit:', habit.id, habit.name);
       
-      // Check and unlock achievements
-      const currentStreak = await getStreak(habit.id);
-      const newAchievements = await checkAndUnlockAchievements(habit, currentStreak);
+      // Step 1: Complete the habit
+      try {
+        await completeHabit(habit);
+        console.log('[COMPLETE] Habit completed successfully');
+      } catch (error: any) {
+        console.error('[COMPLETE] Error in completeHabit:', error);
+        throw new Error(`Completion failed: ${error.message || error}`);
+      }
+      
+      // Step 2: Get current streak
+      let currentStreak = 0;
+      try {
+        currentStreak = await getStreak(habit.id);
+        console.log('[COMPLETE] Current streak:', currentStreak);
+      } catch (error: any) {
+        console.error('[COMPLETE] Error in getStreak:', error);
+        throw new Error(`Get streak failed: ${error.message || error}`);
+      }
+      
+      // Step 3: Check and unlock achievements
+      let newAchievements: any[] = [];
+      try {
+        newAchievements = await checkAndUnlockAchievements(habit, currentStreak);
+        console.log('[COMPLETE] Achievements checked:', newAchievements.length);
+      } catch (error: any) {
+        console.error('[COMPLETE] Error in checkAndUnlockAchievements:', error);
+        throw new Error(`Achievement check failed: ${error.message || error}`);
+      }
       
       // Show celebration for new achievements
       if (newAchievements.length > 0) {
@@ -440,10 +465,17 @@ export default function HabitsScreen() {
         );
       }
       
-      await loadData();
-    } catch (error) {
-      console.error('Error completing habit:', error);
-      Alert.alert('Error', 'Failed to complete habit. Please try again.');
+      // Step 4: Reload data
+      try {
+        await loadData();
+        console.log('[COMPLETE] Data reloaded successfully');
+      } catch (error: any) {
+        console.error('[COMPLETE] Error in loadData:', error);
+        throw new Error(`Reload failed: ${error.message || error}`);
+      }
+    } catch (error: any) {
+      console.error('[COMPLETE] Final error:', error);
+      Alert.alert('Error', error.message || 'Failed to complete habit. Please try again.');
     }
   };
 
@@ -640,14 +672,21 @@ export default function HabitsScreen() {
         </View>
       </View>
 
-      {/* Green Header Cards - Multiple Profiles */}
+      {/* Green Header Cards - All Profiles (Active First) */}
       <ScrollView 
         horizontal 
         showsHorizontalScrollIndicator={false} 
         contentContainerStyle={{ paddingHorizontal: 20, gap: 12 }}
         style={{ marginBottom: 16, flexGrow: 0 }}
       >
-        {profileStatsList.map((stat) => (
+        {profileStatsList
+          .sort((a, b) => {
+            // Active profile first
+            if (a.profile.id === activeProfile?.id) return -1;
+            if (b.profile.id === activeProfile?.id) return 1;
+            return 0;
+          })
+          .map((stat) => (
           <View key={stat.profile.id} style={[styles.greenHeaderCard, { marginHorizontal: 0, marginBottom: 0, width: profileStatsList.length > 1 ? Dimensions.get('window').width - 60 : Dimensions.get('window').width - 40 }]}>
             <View style={styles.greenHeaderGradient}>
               <View style={styles.greenHeaderTop}>

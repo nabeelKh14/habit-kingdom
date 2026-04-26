@@ -33,6 +33,8 @@ config.transformer = {
       inlineRequires: true,
     },
   }),
+  // Use more workers for parallel transformation
+  maxWorkers: 4,
 };
 
 // Exclude wasm from being transformed
