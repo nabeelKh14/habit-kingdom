@@ -210,6 +210,26 @@ export function isChildProfile(): boolean {
   return profile?.type === 'child';
 }
 
+export async function getActiveProfileIdAsync(): Promise<string> {
+  await ensureDbReady();
+  return activeProfileId || 'default';
+}
+
+export async function getActiveProfile(): Promise<Profile | null> {
+  const profiles = await getProfiles();
+  return profiles.find(p => p.id === activeProfileId) || null;
+}
+
+export async function checkIsParent(): Promise<boolean> {
+  const profile = await getActiveProfile();
+  return profile?.type === 'parent';
+}
+
+export async function checkIsChild(): Promise<boolean> {
+  const profile = await getActiveProfile();
+  return profile?.type === 'child';
+}
+
 export async function getProfiles(): Promise<Profile[]> {
   await ensureDbReady();
   
