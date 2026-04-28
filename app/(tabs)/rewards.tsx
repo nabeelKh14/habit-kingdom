@@ -471,25 +471,21 @@ export default function RewardsScreen() {
         </Animated.View>
       )}
 
-      {/* Profile Selector - Full width above header */}
-      <View style={styles.profileSelectorContainer}>
-        <Pressable
-          onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            setProfileMenuVisible(true);
-          }}
-          style={styles.profileButtonFullWidth}
-        >
-          <View style={styles.profileAvatar}>
-            <Ionicons name={activeProfile?.type === 'parent' ? 'person' : 'happy'} size={18} color="#fff" />
-          </View>
-          <Text style={styles.profileName}>{activeProfile?.name || 'Profile'}</Text>
-          <Ionicons name="chevron-down" size={16} color={Colors.textSecondary} />
-        </Pressable>
-      </View>
-
       <View style={styles.header}>
         <View style={styles.headerLeft}>
+          <Pressable
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setProfileMenuVisible(true);
+            }}
+            style={styles.profileButton}
+          >
+            <View style={styles.profileAvatar}>
+              <Ionicons name={activeProfile?.type === 'parent' ? 'person' : 'happy'} size={18} color="#fff" />
+            </View>
+            <Text style={styles.profileName}>{activeProfile?.name || 'Profile'}</Text>
+            <Ionicons name="chevron-down" size={16} color={Colors.textSecondary} />
+          </Pressable>
           <View>
             <Text style={styles.screenTitle}>Rewards</Text>
             <View style={styles.balanceInline}>
@@ -732,30 +728,14 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   headerLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
+    flex: 1,
+    minWidth: 0,
   },
   profileButton: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    padding: 8,
-    borderRadius: 20,
-    backgroundColor: Colors.surface,
-  },
-  profileAvatar: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: Colors.primary,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  profileName: {
-    fontSize: 14,
-    fontFamily: "Nunito_600SemiBold",
-    color: Colors.text,
+    gap: 8,
+    paddingVertical: 4,
   },
   screenTitle: {
     fontSize: 26,
@@ -1168,19 +1148,17 @@ const styles = StyleSheet.create({
     fontFamily: "Nunito_600SemiBold",
     color: Colors.text,
   },
-  profileSelectorContainer: {
-    paddingHorizontal: 20,
-    marginBottom: 12,
+  profileAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: Colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  profileButtonFullWidth: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: Colors.border,
+  profileName: {
+    fontSize: 18,
+    fontFamily: "Nunito_700Bold",
+    color: Colors.text,
   },
 });
