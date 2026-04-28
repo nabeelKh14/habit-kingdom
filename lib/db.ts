@@ -517,7 +517,9 @@ export async function updateUserStats(
   const database = await getDatabase();
 
   if (stats.totalCompletions !== undefined) {
-    await database.run(sql`UPDATE user_stats SET totalCompletions = totalCompletions + ${stats.totalCompletions} WHERE profileId = ${profileId}`);
+    await database.update(schema.userStats)
+      .set({ totalCompletions: sql`${schema.userStats.totalCompletions} + ${stats.totalCompletions}` })
+      .where(eq(schema.userStats.profileId, profileId));
   }
 
   const setValues: Partial<typeof schema.userStats.$inferInsert> = {};
