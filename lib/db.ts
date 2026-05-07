@@ -350,7 +350,7 @@ export async function getTodayCompletionForHabit(
       and(
         eq(schema.completions.habitId, habitId),
         eq(schema.completions.profileId, profileId),
-        sql`date(${schema.completions.completedAt}) = date(${date})`
+        sql`date(completedAt) = date(${date})`
       )
     )
     .limit(1);
@@ -516,21 +516,54 @@ export async function updateUserStats(
 ): Promise<void> {
   const database = await getDatabase();
 
-  if (stats.totalCompletions !== undefined) {
-    await database.update(schema.userStats)
-      .set({ totalCompletions: sql`${schema.userStats.totalCompletions} + ${stats.totalCompletions}` })
-      .where(eq(schema.userStats.profileId, profileId));
-  }
+  // Get current stats (or default if not exists)
+  const current = await database.select().from(schema.userStats)
+    .where(eq(schema.userStats.profileId, profileId))
+    .limit(1);
 
-  const setValues: Partial<typeof schema.userStats.$inferInsert> = {};
+  const existing = current[0] || {
+    profileId,
+    totalCompletions: 0,
+    longestStreak: 0,
+    longestSingleHabitStreak: 0,
+    longestSingleHabitId: null,
+  };
 
-  if (stats.longestStreak !== undefined) setValues.longestStreak = stats.longestStreak;
-  if (stats.longestSingleHabitStreak !== undefined) setValues.longestSingleHabitStreak = stats.longestSingleHabitStreak;
-  if (stats.longestSingleHabitId !== undefined) setValues.longestSingleHabitId = stats.longestSingleHabitId;
+  // Calculate new values
+  const newTotalCompletions = stats.totalCompletions !== undefined
+    ? existing.totalCompletions + stats.totalCompletions
+    : existing.totalCompletions;
 
-  if (Object.keys(setValues).length ===0) return;
+  const newLongestStreak = stats.longestStreak !== undefined
+    ? stats.longestStreak
+    : existing.longestStreak;
 
-  await database.update(schema.userStats).set(setValues).where(eq(schema.userStats.profileId, profileId));
+  const newLongestSingleHabitStreak = stats.longestSingleHabitStreak !== undefined
+    ? stats.longestSingleHabitStreak
+    : existing.longestSingleHabitStreak;
+
+  const newLongestSingleHabitId = stats.longestSingleHabitId !== undefined
+    ? stats.longestSingleHabitId
+    : existing.longestSingleHabitId;
+
+  // Upsert (insert or replace)
+  await database.insert(schema.userStats)
+    .values({
+      profileId,
+      totalCompletions: newTotalCompletions,
+      longestStreak: newLongestStreak,
+      longestSingleHabitStreak: newLongestSingleHabitStreak,
+      longestSingleHabitId: newLongestSingleHabitId,
+    })
+    .onConflictDoUpdate({
+      target: schema.userStats.profileId,
+      set: {
+        totalCompletions: newTotalCompletions,
+        longestStreak: newLongestStreak,
+        longestSingleHabitStreak: newLongestSingleHabitStreak,
+        longestSingleHabitId: newLongestSingleHabitId,
+      }
+    });
 }
 
 // ==================== PURCHASED SKILLS OPERATIONS ====================

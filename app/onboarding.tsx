@@ -291,7 +291,8 @@ export default function OnboardingScreen({
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      behavior="padding"
+      keyboardVerticalOffset={insets.top + 10}
     >
       <View style={[styles.container, { paddingTop: insets.top }]}>
         {/* Skip Button */}
@@ -317,6 +318,7 @@ export default function OnboardingScreen({
           getItemLayout={getItemLayout}
           scrollEventThrottle={16}
           scrollEnabled={!isNameStep}
+          contentContainerStyle={isNameStep ? { paddingBottom: 300 } : undefined}
         />
 
         {/* Progress Indicators */}
@@ -330,7 +332,7 @@ export default function OnboardingScreen({
         <View
           style={[
             styles.buttonContainer,
-            { paddingBottom: insets.bottom + 20 },
+            { paddingBottom: Math.max(insets.bottom + 20, 40) },
           ]}
         >
           <Pressable

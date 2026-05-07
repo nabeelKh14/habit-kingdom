@@ -11,11 +11,103 @@ export interface Migration {
 export const MIGRATIONS: Migration[] = [
   {
     version: 1,
-    up: async (_db: SQLite.SQLiteDatabase) => {
-      // v0 -> v1: Initial schema (handled by existing initializeTables)
+    up: async (db: SQLite.SQLiteDatabase) => {
+      // v0 -> v1: Create all initial tables
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS profiles (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          type TEXT NOT NULL CHECK (type IN ('child', 'parent')),
+          createdAt TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS habits (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          icon TEXT NOT NULL,
+          coinReward INTEGER NOT NULL,
+          color TEXT NOT NULL,
+          createdAt TEXT NOT NULL,
+          frequency TEXT DEFAULT 'once',
+          scheduledTime TEXT,
+          daysOfWeek TEXT,
+          dayOfMonth INTEGER,
+          isPaused INTEGER DEFAULT 0,
+          pauseUntil TEXT,
+          notificationsEnabled INTEGER DEFAULT 0,
+          notificationTime TEXT,
+          profileId TEXT NOT NULL,
+          deletedAt TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS rewards (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          icon TEXT NOT NULL,
+          cost INTEGER NOT NULL,
+          color TEXT NOT NULL,
+          createdAt TEXT NOT NULL,
+          profileId TEXT NOT NULL,
+          deletedAt TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS completions (
+          id TEXT PRIMARY KEY,
+          habitId TEXT NOT NULL,
+          habitName TEXT NOT NULL,
+          coinReward INTEGER NOT NULL,
+          completedAt TEXT NOT NULL,
+          profileId TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS redemptions (
+          id TEXT PRIMARY KEY,
+          rewardId TEXT NOT NULL,
+          rewardName TEXT NOT NULL,
+          cost INTEGER NOT NULL,
+          redeemedAt TEXT NOT NULL,
+          profileId TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS wallet (
+          profileId TEXT PRIMARY KEY,
+          balance INTEGER DEFAULT 0 NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS achievements (
+          id TEXT PRIMARY KEY,
+          trophyId TEXT NOT NULL,
+          unlockedAt TEXT NOT NULL,
+          profileId TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS user_stats (
+          profileId TEXT PRIMARY KEY,
+          totalCompletions INTEGER DEFAULT 0 NOT NULL,
+          longestStreak INTEGER DEFAULT 0 NOT NULL,
+          longestSingleHabitStreak INTEGER DEFAULT 0 NOT NULL,
+          longestSingleHabitId TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS purchased_skills (
+          id TEXT PRIMARY KEY,
+          skillId TEXT NOT NULL,
+          profileId TEXT NOT NULL,
+          purchasedAt TEXT NOT NULL
+        );
+      `);
     },
     down: async (_db: SQLite.SQLiteDatabase) => {
-      // v1 -> v0: No rollback needed for initial schema
+      // v1 -> v0: Drop all tables
+      await _db.execAsync(`DROP TABLE IF EXISTS purchased_skills;`);
+      await _db.execAsync(`DROP TABLE IF EXISTS user_stats;`);
+      await _db.execAsync(`DROP TABLE IF EXISTS achievements;`);
+      await _db.execAsync(`DROP TABLE IF EXISTS wallet;`);
+      await _db.execAsync(`DROP TABLE IF EXISTS redemptions;`);
+      await _db.execAsync(`DROP TABLE IF EXISTS completions;`);
+      await _db.execAsync(`DROP TABLE IF EXISTS rewards;`);
+      await _db.execAsync(`DROP TABLE IF EXISTS habits;`);
+      await _db.execAsync(`DROP TABLE IF EXISTS profiles;`);
     },
   },
   {
@@ -39,13 +131,18 @@ export const MIGRATIONS: Migration[] = [
     up: async (db: SQLite.SQLiteDatabase) => {
       // v2 -> v3: Add UNIQUE constraints and archive support
 
-      // Add deletedAt column for soft delete/archive support
-      await db.execAsync(`
-        ALTER TABLE habits ADD COLUMN deletedAt TEXT;
-      `);
-      await db.execAsync(`
-        ALTER TABLE rewards ADD COLUMN deletedAt TEXT;
-      `);
+      // Add deletedAt column for soft delete/archive support (if not exists)
+      try {
+        await db.execAsync(`ALTER TABLE habits ADD COLUMN deletedAt TEXT;`);
+      } catch (e: any) {
+        // Column might already exist, ignore duplicate column error
+        if (!e.message?.includes('duplicate column')) throw e;
+      }
+      try {
+        await db.execAsync(`ALTER TABLE rewards ADD COLUMN deletedAt TEXT;`);
+      } catch (e: any) {
+        if (!e.message?.includes('duplicate column')) throw e;
+      }
 
       // Add parent count limit check table
       await db.execAsync(`
@@ -60,22 +157,27 @@ export const MIGRATIONS: Migration[] = [
       `);
 
       // Add purchased skills unique constraint (profileId, skillId)
-      // First, drop the table and recreate with proper constraints
-      await db.execAsync(`
-        CREATE TABLE IF NOT EXISTS purchased_skills_new (
-          id TEXT PRIMARY KEY NOT NULL,
-          skillId TEXT NOT NULL,
-          profileId TEXT NOT NULL,
-          purchasedAt TEXT NOT NULL,
-          UNIQUE(profileId, skillId)
-        );
-      `);
-      await db.execAsync(`
-        INSERT OR IGNORE INTO purchased_skills_new (id, skillId, profileId, purchasedAt)
-        SELECT id, skillId, profileId, purchasedAt FROM purchased_skills;
-      `);
-      await db.execAsync(`DROP TABLE purchased_skills;`);
-      await db.execAsync(`ALTER TABLE purchased_skills_new RENAME TO purchased_skills;`);
+      // First, check if we need to recreate the table
+      try {
+        await db.execAsync(`
+          CREATE TABLE IF NOT EXISTS purchased_skills_new (
+            id TEXT PRIMARY KEY NOT NULL,
+            skillId TEXT NOT NULL,
+            profileId TEXT NOT NULL,
+            purchasedAt TEXT NOT NULL,
+            UNIQUE(profileId, skillId)
+          );
+        `);
+        await db.execAsync(`
+          INSERT OR IGNORE INTO purchased_skills_new (id, skillId, profileId, purchasedAt)
+          SELECT id, skillId, profileId, purchasedAt FROM purchased_skills;
+        `);
+        await db.execAsync(`DROP TABLE purchased_skills;`);
+        await db.execAsync(`ALTER TABLE purchased_skills_new RENAME TO purchased_skills;`);
+      } catch (e: any) {
+        // If table recreation fails, it might already have the constraint
+        console.warn('[Migrations v3] purchased_skills recreation note:', e.message);
+      }
 
       // Add profile type CHECK constraint via trigger
       await db.execAsync(`
@@ -101,14 +203,14 @@ export const MIGRATIONS: Migration[] = [
 
       // Ensure 'default' profile exists
       await db.execAsync(`
-        INSERT OR IGNORE INTO profiles (id, name, type, createdAt) 
+        INSERT OR IGNORE INTO profiles (id, name, type, createdAt)
         VALUES ('default', 'Default', 'child', datetime('now'));
       `);
       await db.execAsync(`
         INSERT OR IGNORE INTO wallet (profileId, balance) VALUES ('default', 0);
       `);
       await db.execAsync(`
-        INSERT OR IGNORE INTO user_stats (profileId, totalCompletions, longestStreak, longestSingleHabitStreak) 
+        INSERT OR IGNORE INTO user_stats (profileId, totalCompletions, longestStreak, longestSingleHabitStreak)
         VALUES ('default', 0, 0, 0);
       `);
     },

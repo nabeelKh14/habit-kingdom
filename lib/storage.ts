@@ -1,4 +1,4 @@
-import * as Crypto from "expo-crypto";
+﻿import * as Crypto from "expo-crypto";
 import * as db from "./db";
 import { withTransaction, getDatabase } from "./db";
 import { validateHabitInput, validateRewardInput, validateCompletionInput, validateRedemptionInput, validateProfileInput } from "./validation";
@@ -327,6 +327,8 @@ export async function createProfile(name: string, type: 'child' | 'parent'): Pro
 }
 
 export async function renameProfile(id: string, name: string): Promise<void> {
+  await ensureDbReady();
+  
   try {
     if (!id?.trim()) {
       throw new Error('Profile ID is required');
@@ -337,6 +339,17 @@ export async function renameProfile(id: string, name: string): Promise<void> {
     if (name.trim().length > 50) {
       throw new Error('Profile name must be 50 characters or less');
     }
+    
+    if (useMemoryStore) {
+      // Update in-memory store
+      memoryStore.profiles = memoryStore.profiles.map(p => {
+        if (p.id !== id) return p;
+        return { ...p, name: name.trim() };
+      });
+      saveMemoryStore();
+      return;
+    }
+    
     await db.updateProfile(id, name);
   } catch (error) {
     console.error('[ERROR] renameProfile failed:', error);
@@ -345,6 +358,8 @@ export async function renameProfile(id: string, name: string): Promise<void> {
 }
 
 export async function removeProfile(id: string): Promise<void> {
+  await ensureDbReady();
+  
   try {
     if (!id?.trim()) {
       throw new Error('Profile ID is required');
@@ -448,14 +463,14 @@ export interface Trophy {
 }
 
 export const TROPHIES: Trophy[] = [
-  { id: 'first_step', title: 'First Step', description: 'Complete your first habit', icon: 'star', type: 'completions', requirement: 1, emoji: '🌟' },
-  { id: 'getting_started', title: 'Getting Started', description: 'Achieve a 3-day streak', icon: 'zap', type: 'streak', requirement: 3, emoji: '🔥' },
-  { id: 'week_warrior', title: 'Week Warrior', description: 'Achieve a 7-day streak', icon: 'award', type: 'streak', requirement: 7, emoji: '🏅' },
-  { id: 'two_week_champion', title: 'Two Week Champion', description: 'Achieve a 14-day streak', icon: 'trophy', type: 'streak', requirement: 14, emoji: '🎖️' },
-  { id: 'monthly_master', title: '30 day master', description: 'Achieve a 30-day streak', icon: 'crown', type: 'streak', requirement: 30, emoji: '👑' },
-  { id: 'habit_hero', title: 'Habit Hero', description: 'Complete 100 habits total', icon: 'shield', type: 'completions', requirement: 100, emoji: '🦸' },
-  { id: 'habit_legend', title: 'Habit Legend', description: 'Complete 365 habits total', icon: 'sun', type: 'completions', requirement: 365, emoji: '🌟' },
-  { id: 'consistency_king', title: 'Consistency King', description: 'Achieve a 30-day streak on a single habit', icon: 'heart', type: 'single_habit_streak', requirement: 30, emoji: '💎' },
+  { id: 'first_step', title: 'First Step', description: 'Complete your first habit', icon: 'star', type: 'completions', requirement: 1, emoji: 'ðŸŒŸ' },
+  { id: 'getting_started', title: 'Getting Started', description: 'Achieve a 3-day streak', icon: 'zap', type: 'streak', requirement: 3, emoji: 'ðŸ”¥' },
+  { id: 'week_warrior', title: 'Week Warrior', description: 'Achieve a 7-day streak', icon: 'award', type: 'streak', requirement: 7, emoji: 'ðŸ…' },
+  { id: 'two_week_champion', title: 'Two Week Champion', description: 'Achieve a 14-day streak', icon: 'trophy', type: 'streak', requirement: 14, emoji: 'ðŸŽ–ï¸' },
+  { id: 'monthly_master', title: '30 day master', description: 'Achieve a 30-day streak', icon: 'crown', type: 'streak', requirement: 30, emoji: 'ðŸ‘‘' },
+  { id: 'habit_hero', title: 'Habit Hero', description: 'Complete 100 habits total', icon: 'shield', type: 'completions', requirement: 100, emoji: 'ðŸ¦¸' },
+  { id: 'habit_legend', title: 'Habit Legend', description: 'Complete 365 habits total', icon: 'sun', type: 'completions', requirement: 365, emoji: 'ðŸŒŸ' },
+  { id: 'consistency_king', title: 'Consistency King', description: 'Achieve a 30-day streak on a single habit', icon: 'heart', type: 'single_habit_streak', requirement: 30, emoji: 'ðŸ’Ž' },
 ];
 
 // ==================== HELPERS ====================
@@ -583,6 +598,8 @@ export async function saveHabit(habit: Partial<Pick<Habit, 'frequency' | 'schedu
 }
 
 export async function deleteHabit(id: string): Promise<void> {
+  await ensureDbReady();
+  
   try {
     if (!id || typeof id !== 'string') {
       console.error('[ERROR] deleteHabit called with invalid id:', id);
@@ -619,13 +636,15 @@ export async function deleteHabit(id: string): Promise<void> {
 }
 
 export async function updateHabit(habit: Partial<Pick<Habit, 'name' | 'icon' | 'coinReward' | 'color' | 'frequency' | 'scheduledTime' | 'daysOfWeek' | 'dayOfMonth' | 'notificationsEnabled' | 'notificationTime' | 'profileId'>> & { id: string }): Promise<void> {
+  await ensureDbReady();
+  
   try {
     if (!habit.id) {
       throw new Error('Habit ID is required');
     }
     
     // Profile isolation check - use the habit's profileId if provided, otherwise check active profile
-    if (isEnabled('PROFILE_ISOLATION_CHECKS')) {
+    if (!useMemoryStore && isEnabled('PROFILE_ISOLATION_CHECKS')) {
       const existing = await db.getHabitById(habit.id);
       if (!existing) {
         throw new Error('Habit not found');
@@ -637,6 +656,30 @@ export async function updateHabit(habit: Partial<Pick<Habit, 'name' | 'icon' | '
           throw new Error('UNAUTHORIZED: Habit belongs to another profile');
         }
       }
+    }
+    
+    if (useMemoryStore) {
+      // Update in-memory store
+      memoryStore.habits = memoryStore.habits.map(h => {
+        if (h.id !== habit.id) return h;
+        
+        const updated = { ...h };
+        if (habit.name !== undefined) updated.name = habit.name;
+        if (habit.icon !== undefined) updated.icon = habit.icon;
+        if (habit.coinReward !== undefined) updated.coinReward = habit.coinReward;
+        if (habit.color !== undefined) updated.color = habit.color;
+        if (habit.frequency !== undefined) updated.frequency = habit.frequency;
+        if (habit.scheduledTime !== undefined) updated.scheduledTime = habit.scheduledTime;
+        if (habit.daysOfWeek !== undefined) updated.daysOfWeek = habit.daysOfWeek;
+        if (habit.dayOfMonth !== undefined) updated.dayOfMonth = habit.dayOfMonth;
+        if (habit.notificationsEnabled !== undefined) updated.notificationsEnabled = habit.notificationsEnabled;
+        if (habit.notificationTime !== undefined) updated.notificationTime = habit.notificationTime;
+        if (habit.profileId !== undefined && habit.profileId !== '') updated.profileId = habit.profileId;
+        
+        return updated;
+      });
+      saveMemoryStore();
+      return;
     }
     
     const updateData: any = { id: habit.id };
@@ -667,6 +710,8 @@ export function isHabitPaused(habit: Habit): boolean {
 }
 
 export async function pauseHabit(habitId: string, days: number): Promise<void> {
+  await ensureDbReady();
+  
   if (!habitId || typeof habitId !== 'string') {
     console.error('[ERROR] pauseHabit called with invalid habitId:', habitId);
     return;
@@ -679,6 +724,15 @@ export async function pauseHabit(habitId: string, days: number): Promise<void> {
   const pauseUntilDate = new Date();
   pauseUntilDate.setDate(pauseUntilDate.getDate() + days);
   
+  if (useMemoryStore) {
+    memoryStore.habits = memoryStore.habits.map(h => {
+      if (h.id !== habitId) return h;
+      return { ...h, isPaused: true, pauseUntil: pauseUntilDate.toISOString() };
+    });
+    saveMemoryStore();
+    return;
+  }
+  
   await db.updateHabit({
     id: habitId,
     isPaused: 1,
@@ -687,11 +741,22 @@ export async function pauseHabit(habitId: string, days: number): Promise<void> {
 }
 
 export async function resumeHabit(habitId: string): Promise<void> {
+  await ensureDbReady();
+  
   if (!habitId || typeof habitId !== 'string') {
     console.error('[ERROR] resumeHabit called with invalid habitId:', habitId);
     return;
   }
 
+  if (useMemoryStore) {
+    memoryStore.habits = memoryStore.habits.map(h => {
+      if (h.id !== habitId) return h;
+      return { ...h, isPaused: false, pauseUntil: undefined };
+    });
+    saveMemoryStore();
+    return;
+  }
+  
   await db.updateHabit({
     id: habitId,
     isPaused: 0,
@@ -704,6 +769,21 @@ export async function updateHabitNotifications(
   notificationsEnabled: boolean,
   notificationTime?: string
 ): Promise<void> {
+  await ensureDbReady();
+  
+  if (useMemoryStore) {
+    memoryStore.habits = memoryStore.habits.map(h => {
+      if (h.id !== habitId) return h;
+      return { 
+        ...h, 
+        notificationsEnabled, 
+        notificationTime: notificationTime || undefined 
+      };
+    });
+    saveMemoryStore();
+    return;
+  }
+  
   await db.updateHabit({
     id: habitId,
     notificationsEnabled: notificationsEnabled ? 1 : 0,
@@ -763,6 +843,8 @@ export async function getTodayCompletions(): Promise<HabitCompletion[]> {
 }
 
 export async function completeHabit(habit: Habit): Promise<HabitCompletion> {
+  await ensureDbReady();
+  
   try {
     validateHabitInput(habit);
   } catch (error) {
@@ -852,6 +934,8 @@ export async function completeHabit(habit: Habit): Promise<HabitCompletion> {
 
 // Atomic uncomplete with streak recalculation
 export async function uncompleteHabit(habitId: string, profileId?: string): Promise<void> {
+  await ensureDbReady();
+  
   if (!habitId || typeof habitId !== 'string') {
     console.error('[ERROR] uncompleteHabit called with invalid habitId:', habitId);
     return;
@@ -960,6 +1044,8 @@ export async function saveReward(reward: Omit<Reward, "id" | "createdAt">): Prom
 }
 
 export async function deleteReward(id: string): Promise<void> {
+  await ensureDbReady();
+  
   try {
     if (!id || typeof id !== 'string') {
       console.error('[ERROR] deleteReward called with invalid id:', id);
@@ -996,13 +1082,15 @@ export async function deleteReward(id: string): Promise<void> {
 }
 
 export async function updateReward(reward: Partial<Pick<Reward, 'name' | 'icon' | 'cost' | 'color' | 'profileId'>> & { id: string }): Promise<void> {
+  await ensureDbReady();
+  
   try {
     if (!reward.id) {
       throw new Error('Reward ID is required');
     }
     
     // Profile isolation check
-    if (isEnabled('PROFILE_ISOLATION_CHECKS')) {
+    if (!useMemoryStore && isEnabled('PROFILE_ISOLATION_CHECKS')) {
       const existing = await db.getRewardById(reward.id);
       if (!existing) {
         throw new Error('Reward not found');
@@ -1012,6 +1100,24 @@ export async function updateReward(reward: Partial<Pick<Reward, 'name' | 'icon' 
       }
     }
     
+    if (useMemoryStore) {
+      // Update in-memory store
+      memoryStore.rewards = memoryStore.rewards.map(r => {
+        if (r.id !== reward.id) return r;
+        
+        const updated = { ...r };
+        if (reward.name !== undefined) updated.name = reward.name;
+        if (reward.icon !== undefined) updated.icon = reward.icon;
+        if (reward.cost !== undefined) updated.cost = reward.cost;
+        if (reward.color !== undefined) updated.color = reward.color;
+        if (reward.profileId !== undefined) updated.profileId = reward.profileId;
+        
+        return updated;
+      });
+      saveMemoryStore();
+      return;
+    }
+    
     const updateData: any = { id: reward.id };
     
     if (reward.name !== undefined) updateData.name = reward.name;
@@ -1019,6 +1125,8 @@ export async function updateReward(reward: Partial<Pick<Reward, 'name' | 'icon' 
     if (reward.cost !== undefined) updateData.cost = reward.cost;
     if (reward.color !== undefined) updateData.color = reward.color;
     if (reward.profileId !== undefined) updateData.profileId = reward.profileId;
+    
+    if (Object.keys(updateData).length === 0) return;
     
     await db.updateReward(updateData);
   } catch (error) {
@@ -1069,6 +1177,8 @@ export async function getAllProfileRedemptions(): Promise<(RewardRedemption & { 
 
 // Atomic reward redemption with balance check
 export async function redeemReward(reward: Reward): Promise<RewardRedemption | null> {
+  await ensureDbReady();
+  
   const targetProfileId = reward.profileId || await getActiveProfileId();
 
   if (useMemoryStore) {
@@ -1190,6 +1300,8 @@ export async function updateBalance(delta: number, profileId?: string): Promise<
 // ==================== STREAK OPERATIONS ====================
 
 export async function getStreak(habitId: string, profileId?: string): Promise<number> {
+  await ensureDbReady();
+  
   if (!habitId || typeof habitId !== 'string') {
     console.error('[ERROR] getStreak called with invalid habitId:', habitId);
     return 0;
@@ -1197,7 +1309,17 @@ export async function getStreak(habitId: string, profileId?: string): Promise<nu
   
   try {
     const resolvedProfileId = profileId || await getActiveProfileId();
-    const completions = await db.getCompletionsForHabit(habitId, resolvedProfileId);
+    
+    let completions: { completedAt: string }[];
+    
+    if (useMemoryStore) {
+      // Get completions from memory store
+      completions = memoryStore.completions
+        .filter(c => c.habitId === habitId && c.profileId === resolvedProfileId)
+        .map(c => ({ completedAt: c.completedAt }));
+    } else {
+      completions = await db.getCompletionsForHabit(habitId, resolvedProfileId);
+    }
 
     if (completions.length === 0) return 0;
 
@@ -1217,6 +1339,7 @@ export async function getStreak(habitId: string, profileId?: string): Promise<nu
     for (let i = startOffset; i < 365; i++) {
       const checkDate = new Date(today);
       checkDate.setDate(checkDate.getDate() - i);
+
       const dateStr = checkDate.toISOString().split('T')[0];
 
       const found = completions.some(
@@ -1429,10 +1552,63 @@ export async function checkAndUnlockAchievements(
   habit: Habit,
   currentStreak: number
 ): Promise<Trophy[]> {
+  await ensureDbReady();
+  
   const profileId = habit.profileId || await getActiveProfileId();
   if (!profileId) {
     throw new Error('No profile ID found for achievement check');
   }
+  
+  if (useMemoryStore) {
+    const unlockedAchievements = await getUnlockedAchievements();
+    const unlockedIds = new Set(unlockedAchievements.map((u) => u.trophyId));
+    const stats = await getUserStats(profileId);
+    const newUnlocked: Trophy[] = [];
+    
+    // Update stats in memory
+    const updatedStats = { ...stats };
+    updatedStats.totalCompletions += 1;
+    if (currentStreak > updatedStats.longestStreak) {
+      updatedStats.longestStreak = currentStreak;
+    }
+    if (currentStreak > updatedStats.longestSingleHabitStreak) {
+      updatedStats.longestSingleHabitStreak = currentStreak;
+      updatedStats.longestSingleHabitId = habit.id;
+    }
+    memoryStore.userStatsMap.set(profileId, updatedStats);
+    
+    // Check trophies
+    for (const trophy of TROPHIES) {
+      if (unlockedIds.has(trophy.id)) continue;
+      
+      let shouldUnlock = false;
+      switch (trophy.type) {
+        case 'completions':
+          shouldUnlock = updatedStats.totalCompletions >= trophy.requirement;
+          break;
+        case 'streak':
+          shouldUnlock = updatedStats.longestStreak >= trophy.requirement;
+          break;
+        case 'single_habit_streak':
+          shouldUnlock = updatedStats.longestSingleHabitStreak >= trophy.requirement;
+          break;
+      }
+      
+      if (shouldUnlock) {
+        memoryStore.unlockedAchievements.push({
+          id: Crypto.randomUUID(),
+          trophyId: trophy.id,
+          unlockedAt: new Date().toISOString(),
+          profileId,
+        });
+        newUnlocked.push(trophy);
+      }
+    }
+    
+    saveMemoryStore();
+    return newUnlocked;
+  }
+  
   const unlockedAchievements = await getUnlockedAchievements();
   const unlockedIds = new Set(unlockedAchievements.map((u) => u.trophyId));
   const stats = await getUserStats(profileId);
@@ -1765,6 +1941,7 @@ function validateAmount(amount: number, max: number = MAX_BONUS_AMOUNT): void {
 }
 
 export async function restoreStreakWithCoins(cost?: number): Promise<{ success: boolean; error?: string }> {
+  await ensureDbReady();
   requireParentProfile();
   
   const stats = await getUserStats();
@@ -1781,27 +1958,38 @@ export async function restoreStreakWithCoins(cost?: number): Promise<{ success: 
     return { success: false, error: 'INVALID_COST' };
   }
   
-  const balance = await getBalance();
-  if (balance < calculatedCost) {
-    return { success: false, error: 'INSUFFICIENT_BALANCE' };
+  const targetProfile = await getActiveProfileId();
+  
+  if (useMemoryStore) {
+    const currentBalance = memoryStore.walletBalances.get(targetProfile) || 0;
+    if (currentBalance < calculatedCost) {
+      return { success: false, error: 'INSUFFICIENT_BALANCE' };
+    }
+    memoryStore.walletBalances.set(targetProfile, currentBalance - calculatedCost);
+    const updatedStats = { ...stats };
+    updatedStats.longestStreak = stats.longestStreak + 1;
+    memoryStore.userStatsMap.set(targetProfile, updatedStats);
+    saveMemoryStore();
+    return { success: true };
   }
   
   return await withTransaction(async (database) => {
-    const currentBalance = await db.getWalletBalance(await getActiveProfileId());
+    const currentBalance = await db.getWalletBalance(targetProfile);
     if (currentBalance < calculatedCost) {
       return { success: false, error: 'INSUFFICIENT_BALANCE' };
     }
     
-    await db.deductFromWalletBalance(calculatedCost, await getActiveProfileId());
+    await db.deductFromWalletBalance(calculatedCost, targetProfile);
     await db.updateUserStats({
       longestStreak: stats.longestStreak + 1,
-    }, await getActiveProfileId());
+    }, targetProfile);
     
     return { success: true };
   });
 }
 
 export async function addBonusPoints(amount: number, profileId?: string): Promise<void> {
+  await ensureDbReady();
   validateAmount(amount);
   
   const targetProfile = profileId || await getActiveProfileId();
@@ -1817,6 +2005,7 @@ export async function addBonusPoints(amount: number, profileId?: string): Promis
 }
 
 export async function applyPenaltyPoints(amount: number, profileId?: string): Promise<void> {
+  await ensureDbReady();
   validateAmount(amount);
   
   const targetProfile = profileId || await getActiveProfileId();
@@ -1835,8 +2024,25 @@ export async function applyPenaltyPoints(amount: number, profileId?: string): Pr
 }
 
 export async function resetStreak(profileId?: string): Promise<void> {
+  await ensureDbReady();
   
   const targetProfile = profileId || await getActiveProfileId();
+  
+  if (useMemoryStore) {
+    const stats = memoryStore.userStatsMap.get(targetProfile) || {
+      totalCompletions: 0,
+      longestStreak: 0,
+      longestSingleHabitStreak: 0,
+      longestSingleHabitId: null,
+    };
+    stats.longestStreak = 0;
+    stats.longestSingleHabitStreak = 0;
+    stats.longestSingleHabitId = undefined;
+    memoryStore.userStatsMap.set(targetProfile, stats);
+    saveMemoryStore();
+    return;
+  }
+  
   await db.updateUserStats({
     longestStreak: 0,
     longestSingleHabitStreak: 0,

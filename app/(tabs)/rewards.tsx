@@ -357,73 +357,24 @@ export default function RewardsScreen() {
     router.push(`/add-reward?id=${reward.id}`);
   };
 
-  const handleBonus = () => {
-    Alert.prompt(
-      "Give Bonus Points",
-      `Enter amount of points to add to ${activeProfile?.name}'s account:`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Add",
-          onPress: async (val?: string) => {
-            const num = parseInt(val || "0", 10);
-            if (isNaN(num) || num <= 0) {
-              Alert.alert("Invalid Amount", "Please enter a positive number.");
-              return;
-            }
-            if (num > 10000) {
-              Alert.alert("Amount Too High", "Maximum bonus is 10,000 points.");
-              return;
-            }
-            try {
-              await addBonusPoints(num, activeProfile?.id);
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-              loadData();
-            } catch (error: any) {
-              Alert.alert("Error", error.message || "Failed to add bonus points.");
-            }
-          }
-        }
-      ],
-      "plain-text",
-      settings.bonusAmount.toString(),
-      "numeric"
-    );
+  const handleBonus = async () => {
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await addBonusPoints(settings.bonusAmount, activeProfile?.id);
+      loadData();
+    } catch (error: any) {
+      Alert.alert("Error", error.message || "Failed to add bonus points.");
+    }
   };
 
-  const handlePenalty = () => {
-    Alert.prompt(
-      "Deduct Points",
-      `Enter amount of points to deduct from ${activeProfile?.name}'s account:`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Deduct",
-          style: "destructive",
-          onPress: async (val?: string) => {
-            const num = parseInt(val || "0", 10);
-            if (isNaN(num) || num <= 0) {
-              Alert.alert("Invalid Amount", "Please enter a positive number.");
-              return;
-            }
-            if (num > 10000) {
-              Alert.alert("Amount Too High", "Maximum penalty is 10,000 points.");
-              return;
-            }
-            try {
-              await applyPenaltyPoints(num, activeProfile?.id);
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-              loadData();
-            } catch (error: any) {
-              Alert.alert("Error", error.message || "Failed to apply penalty.");
-            }
-          }
-        }
-      ],
-      "plain-text",
-      settings.penaltyAmount.toString(),
-      "numeric"
-    );
+  const handlePenalty = async () => {
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      await applyPenaltyPoints(settings.penaltyAmount, activeProfile?.id);
+      loadData();
+    } catch (error: any) {
+      Alert.alert("Error", error.message || "Failed to apply penalty. You may not have enough points.");
+    }
   };
 
   const handleResetStreak = () => {

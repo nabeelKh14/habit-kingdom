@@ -49,6 +49,7 @@ import {
   restoreStreakWithCoins,
 } from "../../lib/storage";
 import { getActiveProfileId, setActiveProfileId as saveActiveProfileId } from "../../lib/onboarding-storage";
+import { getReminderSettings, type ReminderSettings } from "../../lib/settings-storage";
 import { HABIT_ICONS } from "../../lib/habitIcons";
 import * as db from "../../lib/db";
 import { requestNotificationPermissions, scheduleHabitNotifications, cancelHabitNotifications } from "../../lib/notifications";
@@ -334,15 +335,26 @@ export default function HabitsScreen() {
     longestStreak: number;
   }[]>([]);
 
+  // Settings for bonus/penalty (loaded for potential future use)
+  const [settings, setSettings] = useState<ReminderSettings>({
+    middayEnabled: false,
+    middayTime: "12:00",
+    nightEnabled: false,
+    nightTime: "21:00",
+    bonusAmount: 10,
+    penaltyAmount: 10,
+  });
+
   const loadData = useCallback(async () => {
     try {
-      const [allHabits, todayCompletions, pts, consistency, stats, profileList] = await Promise.all([
+      const [allHabits, todayCompletions, pts, consistency, stats, profileList, settingsData] = await Promise.all([
         getHabits(),
         getTodayCompletions(),
         getBalance(),
         getConsistencyScore(),
         getUserStats(),
         getProfiles(),
+        getReminderSettings(),
       ]);
 
       // Fetch stats for all profiles
@@ -392,12 +404,13 @@ export default function HabitsScreen() {
       setConsistencyScore(consistency);
       setLongestStreak(stats.longestStreak);
       setProfiles(profileList);
-      
-      // Find active profile
-      const current = await getActiveProfile() || profileList[0] || null;
-      setActiveProfile(current);
-      
-      setLoading(false);
+       setSettings(settingsData);
+       
+       // Find active profile
+       const current = await getActiveProfile() || profileList[0] || null;
+       setActiveProfile(current);
+       
+       setLoading(false);
     } catch (error) {
       console.error('Error loading data:', error);
       Alert.alert('Error', 'Failed to load habits. Please try again.');
@@ -624,6 +637,8 @@ export default function HabitsScreen() {
       Alert.alert("Error", "Failed to update notification settings.");
     }
   };
+
+  // Bonus/penalty functions removed - now only on rewards page
 
   const completedCount = habits.filter((h) => h.completedToday).length;
   const activeHabits = habits.filter((h) => !h.isPaused);
