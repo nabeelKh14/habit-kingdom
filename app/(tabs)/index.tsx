@@ -1162,11 +1162,20 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     backgroundColor: Colors.surface,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: Colors.border + "80",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.015,
+    shadowRadius: 2,
+    elevation: 0.5,
   },
   filterButtonActive: {
     backgroundColor: Colors.primary,
     borderColor: Colors.primary,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
   },
   filterButtonText: {
     fontSize: 14,
@@ -1180,13 +1189,15 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: Colors.surface,
-    borderRadius: 16,
-    padding: 14,
+    borderRadius: 20, // More premium rounded corner
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.border + "40", // Subtle border ring
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    elevation: 1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.02, // Ultra soft shadow
+    shadowRadius: 8,
+    elevation: 1.5,
     minHeight: 88,
   },
   habitCardCompleted: {

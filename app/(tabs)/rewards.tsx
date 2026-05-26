@@ -824,14 +824,16 @@ const styles = StyleSheet.create({
   },
   rewardCard: {
     backgroundColor: Colors.surface,
-    borderRadius: 18,
-    padding: 16,
+    borderRadius: 22, // Premium rounded corner
+    padding: 18,
     alignItems: "center",
+    borderWidth: 1,
+    borderColor: Colors.border + "40", // Subtle border ring
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    elevation: 1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.02, // Soft shadow
+    shadowRadius: 8,
+    elevation: 1.5,
     minHeight: 180,
   },
   rewardCardDisabled: {
