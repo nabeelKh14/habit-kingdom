@@ -8,12 +8,12 @@ export const habitSchema = z.object({
   coinReward: z.number().int().positive('Coin reward must be positive').max(1000, 'Coin reward too high'),
   color: z.string().regex(/^#[0-9A-F]{6}$/i, 'Color must be a valid hex color'),
   frequency: z.enum(['once', 'daily', 'weekly', 'monthly']),
-  scheduledTime: z.string().regex(/^([0-1][0-9]|2[0-3]):[0-5][0-9]$/).optional(),
-  daysOfWeek: z.array(z.number().min(0).max(6)).optional(),
-  dayOfMonth: z.number().int().min(1).max(31).optional(),
-  notificationsEnabled: z.boolean().optional(),
-  notificationTime: z.string().regex(/^([0-1][0-9]|2[0-3]):[0-5][0-9]$/).optional(),
-  profileId: z.string().optional(),
+  scheduledTime: z.string().regex(/^([0-1][0-9]|2[0-3]):[0-5][0-9]$/).nullable().optional(),
+  daysOfWeek: z.array(z.number().min(0).max(6)).nullable().optional(),
+  dayOfMonth: z.number().int().min(1).max(31).nullable().optional(),
+  notificationsEnabled: z.boolean().nullable().optional(),
+  notificationTime: z.string().regex(/^([0-1][0-9]|2[0-3]):[0-5][0-9]$/).nullable().optional(),
+  profileId: z.string().nullable().optional(),
 });
 
 export const rewardSchema = z.object({

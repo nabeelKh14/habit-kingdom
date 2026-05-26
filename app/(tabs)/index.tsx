@@ -59,7 +59,7 @@ interface HabitWithState extends Habit {
   streak: number;
   nextOccurrence?: Date;
   isPaused: boolean | undefined;
-  notificationsEnabled?: boolean;
+  notificationsEnabled?: boolean | null;
 }
 
 function formatScheduledTime(time: string | undefined): string {
@@ -174,7 +174,7 @@ function HabitCard({
     onEdit(habit);
   };
 
-  const scheduledTimeFormatted = formatScheduledTime(habit.scheduledTime);
+  const scheduledTimeFormatted = formatScheduledTime(habit.scheduledTime as string | undefined);
   const frequencyLabel = getFrequencyLabel(habit.frequency);
 
   return (
@@ -494,7 +494,7 @@ export default function HabitsScreen() {
 
   const handleUncomplete = async (habit: Habit) => {
     try {
-      await uncompleteHabit(habit.id, habit.profileId);
+      await uncompleteHabit(habit.id, habit.profileId as string | undefined);
       await loadData();
     } catch (error) {
       console.error('Error uncompleting habit:', error);
@@ -1028,7 +1028,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   subtitle: {
-    fontSize: 14,
+    fontSize: 13,
     fontFamily: "Nunito_500Medium",
     color: Colors.textSecondary,
     marginTop: 2,
@@ -1047,7 +1047,7 @@ const styles = StyleSheet.create({
   },
   greenHeaderGradient: {
     backgroundColor: Colors.primaryDark,
-    padding: 20,
+    padding: 16,
   },
   greenHeaderTop: {
     flexDirection: "row",

@@ -15,10 +15,14 @@ import {
   Nunito_700Bold,
   Nunito_800ExtraBold,
 } from "@expo-google-fonts/nunito";
-import * as Notifications from "expo-notifications";
+// Note: expo-notifications doesn't work in Expo Go SDK 53+
+// We wrap it in a try/catch or conditional import if needed, 
+// but for now we just comment it out to prevent the instant crash on boot.
+// import * as Notifications from "expo-notifications";
 import { requestNotificationPermissions } from "../lib/notifications";
 import { isOnboardingComplete, setOnboardingComplete, getActiveProfileId } from "../lib/onboarding-storage";
 import { setActiveProfileId, getProfiles } from "../lib/storage";
+import { supabase } from "../lib/supabase";
 import OnboardingScreen from "./onboarding";
 import Colors from "../constants/colors";
 
@@ -29,6 +33,8 @@ function NotificationHandler() {
   const router = useRouter();
 
   useEffect(() => {
+    // Disabled for Expo Go compatibility
+    /*
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
       const habitId = response.notification.request.content.data?.habitId;
       if (habitId) {
@@ -38,6 +44,7 @@ function NotificationHandler() {
     });
 
     return () => subscription.remove();
+    */
   }, [router]);
 
   return null;
@@ -47,9 +54,14 @@ function RootLayoutNav() {
   // Request notification permissions on app start (only if not already granted)
   useEffect(() => {
     const checkAndRequestPermissions = async () => {
-      const { status } = await Notifications.getPermissionsAsync();
-      if (status !== 'granted') {
-        await requestNotificationPermissions();
+      try {
+        // Disabled for Expo Go compatibility
+        // const { status } = await Notifications.getPermissionsAsync();
+        // if (status !== 'granted') {
+        //  await requestNotificationPermissions();
+        // }
+      } catch (e) {
+        console.warn("Notifications check failed (expected in Expo Go):", e);
       }
     };
     checkAndRequestPermissions();
@@ -98,14 +110,17 @@ export default function RootLayout() {
   const [showOnboarding, setShowOnboarding] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Check onboarding status on mount
+  // Check onboarding status and session on mount
   useEffect(() => {
-    async function checkOnboarding() {
+    async function checkSessionAndOnboarding() {
       try {
+        const { data: { session } } = await supabase.auth.getSession();
         const complete = await isOnboardingComplete();
-        setShowOnboarding(!complete);
         
-        if (complete) {
+        // If there's no active session, we require login/onboarding
+        setShowOnboarding(!session || !complete);
+        
+        if (session && complete) {
           // Initialize profiles (create default if none exist)
           const { initializeProfiles } = await import("../lib/storage");
           await initializeProfiles();
@@ -120,16 +135,28 @@ export default function RootLayout() {
             const { saveProfiles } = await import("../lib/onboarding-storage");
             await saveProfiles(profiles.map(p => ({ id: p.id, name: p.name, type: p.type })));
           }
+
+          // Run background sync with Supabase
+          const { syncWithSupabase } = await import("../lib/sync");
+          syncWithSupabase().then(res => {
+            if (res.success) {
+              console.log('[SUPABASE] Background sync completed:', res.message);
+            } else {
+              console.log('[SUPABASE] Background sync skipped:', res.message);
+            }
+          }).catch(err => {
+            console.error('[SUPABASE] Background sync error:', err);
+          });
         }
       } catch (error) {
-        console.error("Error checking onboarding:", error);
-        setShowOnboarding(true); // Show onboarding on error
+        console.error("Error checking session/onboarding:", error);
+        setShowOnboarding(true);
       } finally {
         setIsLoading(false);
       }
     }
 
-    checkOnboarding();
+    checkSessionAndOnboarding();
   }, []);
 
   // Debug: Log font loading status

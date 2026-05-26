@@ -30,6 +30,7 @@ import {
   removeProfile,
   createProfile,
   type Profile,
+  logout,
 } from "../lib/storage";
 import {
   requestNotificationPermissions,
@@ -43,6 +44,7 @@ import {
   getCurrentIcon,
   setAppIcon,
 } from "../lib/app-icon";
+import { syncWithSupabase, getLastSyncTime } from "../lib/sync";
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -56,6 +58,8 @@ export default function SettingsScreen() {
   });
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState<string | null>(null);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [editingField, setEditingField] = useState<'midday' | 'night'>('midday');
   const [selectedIconId, setSelectedIconId] = useState('primary');
@@ -80,20 +84,64 @@ export default function SettingsScreen() {
 
   const loadSettings = async () => {
     try {
-      const [s, icon, p, activeProfile] = await Promise.all([
+      const [s, icon, p, activeProfile, lastSyncTime] = await Promise.all([
         getReminderSettings(),
         getCurrentIcon(),
         getProfiles(),
         getActiveProfile(),
+        getLastSyncTime(),
       ]);
       setSettings(s);
       setSelectedIconId(icon);
       setProfiles(p);
+      setLastSync(lastSyncTime);
     } catch (error) {
       console.error("Error loading settings:", error);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSync = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setSyncing(true);
+    try {
+      const result = await syncWithSupabase();
+      if (result.success) {
+        Alert.alert("Sync Successful", result.message);
+        const lastSyncTime = await getLastSyncTime();
+        setLastSync(lastSyncTime);
+      } else {
+        Alert.alert("Sync Failed", result.message);
+      }
+    } catch (error: any) {
+      Alert.alert("Sync Error", error.message || error);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleSignOut = () => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    Alert.alert(
+      "Sign Out & Reset",
+      "Are you sure you want to sign out? This will completely clear all local database caches and sign you out of your secure profile.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Sign Out",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await logout();
+              router.replace("/onboarding");
+            } catch (error: any) {
+              Alert.alert("Error Signing Out", error.message || error);
+            }
+          }
+        }
+      ]
+    );
   };
 
   const parseTime = (timeStr: string) => {
@@ -610,6 +658,53 @@ export default function SettingsScreen() {
             </Pressable>
           ))}
         </View>
+
+        {/* Supabase Cloud Sync Section */}
+        <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Cloud Sync (Supabase)</Text>
+        <Text style={styles.sectionDescription}>
+          Backup your family habits, completions, achievements, and game progress to the cloud securely.
+        </Text>
+
+        <View style={styles.settingCard}>
+          <View style={styles.settingRow}>
+            <View style={styles.settingLeft}>
+              <View style={[styles.settingIcon, { backgroundColor: Colors.primary + "20" }]}>
+                <Ionicons name="cloud-upload" size={22} color={Colors.primary} />
+              </View>
+              <View style={styles.settingInfo}>
+                <Text style={styles.settingTitle}>Supabase Cloud Backup</Text>
+                <Text style={styles.settingDescription}>
+                  {lastSync ? `Last synced: ${new Date(lastSync).toLocaleString()}` : 'Never synced to cloud'}
+                </Text>
+              </View>
+            </View>
+            <Pressable
+              onPress={handleSync}
+              disabled={syncing}
+              style={[
+                styles.syncButton,
+                syncing && { opacity: 0.6 }
+              ]}
+            >
+              <Ionicons name={syncing ? "refresh" : "sync"} size={16} color="#fff" style={syncing ? { transform: [{ rotate: '0deg' }] } : {}} />
+              <Text style={styles.syncButtonText}>{syncing ? "Syncing..." : "Sync Now"}</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        {/* Account / Danger Zone Section */}
+        <Text style={[styles.sectionTitle, { marginTop: 24, color: Colors.error }]}>Danger Zone</Text>
+        <Text style={styles.sectionDescription}>
+          Manage your account session and local secure caches.
+        </Text>
+
+        <Pressable
+          onPress={handleSignOut}
+          style={[styles.resetOnboardingButton, { marginBottom: 30 }]}
+        >
+          <Ionicons name="log-out" size={20} color={Colors.error} />
+          <Text style={styles.resetOnboardingText}>Sign Out of Phone Profile</Text>
+        </Pressable>
       </ScrollView>
 
       {/* Time Picker Modal */}
@@ -1235,6 +1330,20 @@ const styles = StyleSheet.create({
   },
   inputModalButtonConfirmText: {
     fontSize: 16,
+    fontFamily: 'Nunito_700Bold',
+    color: '#fff',
+  },
+  syncButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+  },
+  syncButtonText: {
+    fontSize: 14,
     fontFamily: 'Nunito_700Bold',
     color: '#fff',
   },

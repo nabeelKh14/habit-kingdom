@@ -607,3 +607,22 @@ export async function isSkillPurchased(skillId: string, profileId: string): Prom
     .where(and(eq(schema.purchasedSkills.skillId, skillId), eq(schema.purchasedSkills.profileId, profileId)));
   return (result[0]?.count ?? 0) > 0;
 }
+
+export async function clearDatabase(): Promise<void> {
+  const database = await getDatabase();
+  try {
+    await database.delete(schema.purchasedSkills);
+    await database.delete(schema.userStats);
+    await database.delete(schema.achievements);
+    await database.delete(schema.wallet);
+    await database.delete(schema.redemptions);
+    await database.delete(schema.completions);
+    await database.delete(schema.rewards);
+    await database.delete(schema.habits);
+    await database.delete(schema.profiles);
+    console.log('[DB] Local database cleared successfully.');
+  } catch (error) {
+    console.error('[DB] Failed to clear local database:', error);
+    throw error;
+  }
+}

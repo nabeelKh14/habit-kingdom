@@ -14,8 +14,17 @@ import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "expo-router";
 import Animated, {
   FadeIn,
+  FadeOut,
   FadeInDown,
+  ZoomIn,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withSequence,
+  withTiming,
+  withRepeat,
 } from "react-native-reanimated";
+import * as Haptics from "expo-haptics";
 import Colors from "../../constants/colors";
 import CuteAvatar from "../../components/CuteAvatar";
 import {
@@ -40,8 +49,62 @@ interface SkillNode {
   purchased: boolean;
 }
 
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+function SkillCard({ skill, onPress, onLongPress, canAfford }: { skill: SkillNode; onPress: () => void; onLongPress: () => void; canAfford: boolean }) {
+  const scale = useSharedValue(1);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  const isPurchasable = skill.unlocked && !skill.purchased && canAfford;
+
+  return (
+    <AnimatedPressable
+      onPressIn={() => (scale.value = withSpring(0.95))}
+      onPressOut={() => (scale.value = withSpring(1))}
+      onPress={onPress}
+      onLongPress={onLongPress}
+      style={[
+        styles.skillCard,
+        animatedStyle,
+        skill.purchased && styles.skillCardPurchased,
+        !skill.unlocked && !skill.purchased && styles.skillCardLocked,
+        isPurchasable && styles.skillCardPurchasable,
+      ]}
+    >
+      <View style={[styles.iconWrapper, skill.purchased && styles.iconWrapperPurchased]}>
+        <Text style={styles.skillIcon}>{skill.icon}</Text>
+      </View>
+      <Text style={[
+        styles.skillName,
+        !skill.unlocked && !skill.purchased && styles.skillNameLocked,
+      ]} numberOfLines={1}>
+        {skill.name}
+      </Text>
+      {skill.purchased ? (
+        <View style={styles.purchasedBadge}>
+          <Ionicons name="checkmark-circle" size={14} color={Colors.success} />
+          <Text style={styles.purchasedText}>Owned</Text>
+        </View>
+      ) : !skill.unlocked ? (
+        <View style={styles.lockedBadge}>
+          <Ionicons name="lock-closed" size={12} color={Colors.textLight} />
+          <Text style={styles.lockedText}>
+            {skill.requirement?.value}-day streak
+          </Text>
+        </View>
+      ) : (
+        <View style={[styles.costBadge, isPurchasable && styles.costBadgePurchasable]}>
+          <Ionicons name="diamond" size={11} color={isPurchasable ? "#fff" : Colors.accent} />
+          <Text style={[styles.costText, isPurchasable && styles.costTextPurchasable]}>{skill.cost}</Text>
+        </View>
+      )}
+    </AnimatedPressable>
+  );
+}
 const SKILL_TREE: SkillNode[] = [
-  // Tier 1 - Starter gear
   { id: 'wooden_sword', name: 'Wooden Sword', description: 'Your first weapon!', icon: '⚔️', cost: 0, type: 'weapon', tier: 1, unlocked: true, purchased: false },
   { id: 'leather_armor', name: 'Leather Armor', description: 'Basic protection', icon: '🛡️', cost: 20, type: 'armor', tier: 1, unlocked: true, purchased: false },
   { id: 'speed_boots', name: 'Speed Boots', description: 'Move faster!', icon: '👟', cost: 15, type: 'accessory', tier: 1, unlocked: true, purchased: false },
@@ -227,45 +290,16 @@ export default function KingdomScreen() {
                   entering={FadeInDown.delay(idx * 80).duration(300)}
                   style={styles.skillCardWrapper}
                 >
-                  <Pressable
+                  <SkillCard 
+                    skill={skill} 
+                    canAfford={points >= skill.cost}
                     onPress={() => {
                       if (!skill.purchased) {
                         setSelectedSkill(skill);
                       }
                     }}
                     onLongPress={() => handlePurchaseSkill(skill)}
-                    style={[
-                      styles.skillCard,
-                      skill.purchased && styles.skillCardPurchased,
-                      !skill.unlocked && !skill.purchased && styles.skillCardLocked,
-                    ]}
-                  >
-                    <Text style={styles.skillIcon}>{skill.icon}</Text>
-                    <Text style={[
-                      styles.skillName,
-                      !skill.unlocked && !skill.purchased && styles.skillNameLocked,
-                    ]} numberOfLines={1}>
-                      {skill.name}
-                    </Text>
-                    {skill.purchased ? (
-                      <View style={styles.purchasedBadge}>
-                        <Ionicons name="checkmark-circle" size={14} color={Colors.success} />
-                        <Text style={styles.purchasedText}>Owned</Text>
-                      </View>
-                    ) : !skill.unlocked ? (
-                      <View style={styles.lockedBadge}>
-                        <Ionicons name="lock-closed" size={12} color={Colors.textLight} />
-                        <Text style={styles.lockedText}>
-                          {skill.requirement?.value}-day streak
-                        </Text>
-                      </View>
-                    ) : (
-                      <View style={styles.costBadge}>
-                        <Ionicons name="diamond" size={11} color={Colors.accent} />
-                        <Text style={styles.costText}>{skill.cost}</Text>
-                      </View>
-                    )}
-                  </Pressable>
+                  />
                 </Animated.View>
               ))}
             </View>
@@ -277,9 +311,9 @@ export default function KingdomScreen() {
 
       {/* Skill Detail Modal */}
       {selectedSkill && (
-        <Animated.View entering={FadeIn.duration(200)} style={styles.detailOverlay}>
+        <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(200)} style={styles.detailOverlay}>
           <Pressable style={styles.detailDismiss} onPress={() => setSelectedSkill(null)} />
-          <View style={styles.detailCard}>
+          <Animated.View entering={ZoomIn.springify().damping(15).stiffness(150)} style={styles.detailCard}>
             <Text style={styles.detailIcon}>{selectedSkill.icon}</Text>
             <Text style={styles.detailName}>{selectedSkill.name}</Text>
             <Text style={styles.detailDesc}>{selectedSkill.description}</Text>
@@ -294,16 +328,20 @@ export default function KingdomScreen() {
               </View>
             </View>
             {selectedSkill.unlocked && !selectedSkill.purchased && (
-              <Pressable
+              <AnimatedPressable
+                onPressIn={() => Haptics.selectionAsync()}
                 onPress={() => {
                   handlePurchaseSkill(selectedSkill);
                   setSelectedSkill(null);
                 }}
-                style={styles.buyButton}
+                style={[
+                  styles.buyButton,
+                  points < selectedSkill.cost && styles.buyButtonDisabled
+                ]}
               >
                 <Ionicons name="diamond" size={18} color="#fff" />
                 <Text style={styles.buyButtonText}>Buy for {selectedSkill.cost} coins</Text>
-              </Pressable>
+              </AnimatedPressable>
             )}
             {selectedSkill.purchased && (
               <View style={styles.ownedButton}>
@@ -321,7 +359,7 @@ export default function KingdomScreen() {
                 </Text>
               </View>
             )}
-          </View>
+          </Animated.View>
         </Animated.View>
       )}
     </View>
@@ -427,22 +465,46 @@ const styles = StyleSheet.create({
   },
   skillCard: {
     backgroundColor: Colors.surface,
-    borderRadius: 16,
-    padding: 14,
+    borderRadius: 20,
+    padding: 16,
     alignItems: "center",
     borderWidth: 2,
     borderColor: Colors.border,
+    shadowColor: Colors.text,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 3,
   },
   skillCardPurchased: {
     borderColor: Colors.success,
-    backgroundColor: Colors.success + "08",
+    backgroundColor: Colors.surface,
+  },
+  skillCardPurchasable: {
+    borderColor: Colors.accent,
+    backgroundColor: Colors.surface,
+    shadowColor: Colors.accent,
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
   },
   skillCardLocked: {
     opacity: 0.5,
+    backgroundColor: Colors.background,
+  },
+  iconWrapper: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: Colors.background,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 10,
+  },
+  iconWrapperPurchased: {
+    backgroundColor: Colors.success + "15",
   },
   skillIcon: {
     fontSize: 32,
-    marginBottom: 6,
   },
   skillName: {
     fontSize: 13,
@@ -486,15 +548,21 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 3,
-    backgroundColor: Colors.accent + "15",
+    backgroundColor: Colors.border,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 8,
   },
+  costBadgePurchasable: {
+    backgroundColor: Colors.accent,
+  },
   costText: {
     fontSize: 12,
     fontFamily: "Nunito_700Bold",
-    color: Colors.accentDark,
+    color: Colors.textSecondary,
+  },
+  costTextPurchasable: {
+    color: "#fff",
   },
   // Detail overlay
   detailOverlay: {
@@ -565,6 +633,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     width: "100%",
     justifyContent: "center",
+  },
+  buyButtonDisabled: {
+    backgroundColor: Colors.border,
+    opacity: 0.7,
   },
   buyButtonText: {
     fontSize: 16,

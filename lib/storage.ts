@@ -11,6 +11,7 @@ let dbInitialized = false;
 let dbInitPromise: Promise<void> | null = null;
 
 const SESSION_KEY = 'habit_kingdom_storage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // In-memory store for web fallback
 const memoryStore = {
@@ -27,8 +28,8 @@ const memoryStore = {
   activeProfileId: 'default',
 };
 
-function saveMemoryStore(): void {
-  if (!isWeb) return;
+async function saveMemoryStore() {
+  // Persist across app restarts even when SQLite fails locally
   try {
     const data = {
       profiles: memoryStore.profiles,
@@ -43,16 +44,15 @@ function saveMemoryStore(): void {
       purchasedSkillsMap: Object.fromEntries(memoryStore.purchasedSkillsMap.entries()),
       activeProfileId: memoryStore.activeProfileId,
     };
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify(data));
+    await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(data));
   } catch (error) {
-    console.warn('[STORAGE] Failed to save to sessionStorage:', error);
+    console.warn('[STORAGE] Failed to save memory store:', error);
   }
 }
 
-function loadMemoryStore(): boolean {
-  if (!isWeb) return false;
+async function loadMemoryStore() {
   try {
-    const saved = sessionStorage.getItem(SESSION_KEY);
+    const saved = await AsyncStorage.getItem(SESSION_KEY);
     if (saved) {
       const data = JSON.parse(saved);
       memoryStore.profiles = data.profiles || [];
@@ -73,13 +73,11 @@ function loadMemoryStore(): boolean {
         : new Map<string, string[]>();
       memoryStore.activeProfileId = data.activeProfileId || 'default';
       activeProfileId = memoryStore.activeProfileId;
-      console.log('[STORAGE] Loaded from sessionStorage');
-      return true;
+      console.log('[STORAGE] Loaded from AsyncStorage fallback');
     }
   } catch (error) {
-    console.warn('[STORAGE] Failed to load from sessionStorage:', error);
+    console.warn('[STORAGE] Failed to load from AsyncStorage:', error);
   }
-  return false;
 }
 
 // Initialize database on module load
@@ -97,7 +95,7 @@ async function ensureDbReady(): Promise<void> {
     // On web, always use memory store and load from sessionStorage first
     if (isWeb) {
       useMemoryStore = true;
-      loadMemoryStore();
+      await loadMemoryStore();
       console.log('[STORAGE] Web detected: using sessionStorage-persisted memory store');
     } else {
       try {
@@ -108,7 +106,7 @@ async function ensureDbReady(): Promise<void> {
       } catch (error: any) {
         console.warn('[STORAGE] Database failed, falling back to in-memory store');
         useMemoryStore = true;
-        loadMemoryStore();
+        await loadMemoryStore();
       }
     }
     dbInitialized = true;
@@ -174,7 +172,7 @@ export function setActiveProfileId(id: string): void {
     p.id === id ? { ...p, id } : p
   );
   if (useMemoryStore) {
-    saveMemoryStore();
+    saveMemoryStore().catch(e => console.error(e));
   }
 }
 
@@ -308,7 +306,7 @@ export async function createProfile(name: string, type: 'child' | 'parent'): Pro
         longestSingleHabitId: null,
       });
       memoryStore.purchasedSkillsMap.set(profile.id, []);
-      saveMemoryStore();
+      saveMemoryStore().catch(e => console.error(e));
       console.log('[STORAGE] Created profile in memory:', profile.name);
     } else {
       await db.insertProfile({
@@ -346,7 +344,7 @@ export async function renameProfile(id: string, name: string): Promise<void> {
         if (p.id !== id) return p;
         return { ...p, name: name.trim() };
       });
-      saveMemoryStore();
+      saveMemoryStore().catch(e => console.error(e));
       return;
     }
     
@@ -383,8 +381,8 @@ export async function removeProfile(id: string): Promise<void> {
       if (activeProfileId === id) {
         activeProfileId = memoryStore.profiles.length > 0 ? memoryStore.profiles[0].id : 'default';
         memoryStore.activeProfileId = activeProfileId;
-      }
-      saveMemoryStore();
+    }
+    saveMemoryStore().catch(e => console.error(e));
       return;
     }
     
@@ -405,14 +403,14 @@ export interface Habit {
   color: string;
   createdAt: string;
   frequency: 'daily' | 'weekly' | 'monthly' | 'once';
-  scheduledTime?: string;
-  daysOfWeek?: number[];
-  dayOfMonth?: number;
-  isPaused?: boolean;
-  pauseUntil?: string;
-  notificationsEnabled?: boolean;
-  notificationTime?: string;
-  profileId?: string;
+  scheduledTime?: string | null;
+  daysOfWeek?: number[] | null;
+  dayOfMonth?: number | null;
+  isPaused?: boolean | null;
+  pauseUntil?: string | null;
+  notificationsEnabled?: boolean | null;
+  notificationTime?: string | null;
+  profileId?: string | null;
 }
 
 export interface HabitCompletion {
@@ -569,12 +567,12 @@ export async function saveHabit(habit: Partial<Pick<Habit, 'frequency' | 'schedu
   
   if (useMemoryStore) {
     memoryStore.habits.push(newHabit);
-    saveMemoryStore();
+    saveMemoryStore().catch(e => console.error(e));
     console.log('[STORAGE] Saved habit to memory:', newHabit.name);
     return newHabit;
   }
   
-  try {
+    try {
     await db.insertHabit({
       id: newHabit.id,
       name: newHabit.name,
@@ -583,12 +581,12 @@ export async function saveHabit(habit: Partial<Pick<Habit, 'frequency' | 'schedu
       color: newHabit.color,
       createdAt: newHabit.createdAt,
       frequency: newHabit.frequency,
-      scheduledTime: newHabit.scheduledTime,
+      scheduledTime: newHabit.scheduledTime === null ? undefined : newHabit.scheduledTime,
       daysOfWeek: newHabit.daysOfWeek ? JSON.stringify(newHabit.daysOfWeek) : undefined,
-      dayOfMonth: newHabit.dayOfMonth,
+      dayOfMonth: newHabit.dayOfMonth === null ? undefined : newHabit.dayOfMonth,
       notificationsEnabled: newHabit.notificationsEnabled ? 1 : 0,
-      notificationTime: newHabit.notificationTime,
-      profileId: newHabit.profileId || await getActiveProfileId(),
+      notificationTime: newHabit.notificationTime === null ? undefined : newHabit.notificationTime,
+      profileId: newHabit.profileId || await getActiveProfileId() || 'default',
     });
     return newHabit;
   } catch (error) {
@@ -610,7 +608,7 @@ export async function deleteHabit(id: string): Promise<void> {
       const habit = memoryStore.habits.find(h => h.id === id);
       if (habit && habit.profileId === (activeProfileId || 'default')) {
         memoryStore.habits = memoryStore.habits.filter(h => h.id !== id);
-        saveMemoryStore();
+        saveMemoryStore().catch(e => console.error(e));
       }
       return;
     }
@@ -635,7 +633,7 @@ export async function deleteHabit(id: string): Promise<void> {
   }
 }
 
-export async function updateHabit(habit: Partial<Pick<Habit, 'name' | 'icon' | 'coinReward' | 'color' | 'frequency' | 'scheduledTime' | 'daysOfWeek' | 'dayOfMonth' | 'notificationsEnabled' | 'notificationTime' | 'profileId'>> & { id: string }): Promise<void> {
+export async function updateHabit(habit: any): Promise<void> {
   await ensureDbReady();
   
   try {
@@ -678,7 +676,7 @@ export async function updateHabit(habit: Partial<Pick<Habit, 'name' | 'icon' | '
         
         return updated;
       });
-      saveMemoryStore();
+      saveMemoryStore().catch(e => console.error(e));
       return;
     }
     
@@ -690,7 +688,7 @@ export async function updateHabit(habit: Partial<Pick<Habit, 'name' | 'icon' | '
     if (habit.color !== undefined) updateData.color = habit.color;
     if (habit.frequency !== undefined) updateData.frequency = habit.frequency;
     if (habit.scheduledTime !== undefined) updateData.scheduledTime = habit.scheduledTime;
-    if (habit.daysOfWeek !== undefined) updateData.daysOfWeek = habit.daysOfWeek ? JSON.stringify(habit.daysOfWeek) : undefined;
+    if (habit.daysOfWeek !== undefined) updateData.daysOfWeek = habit.daysOfWeek ? JSON.stringify(habit.daysOfWeek) : null;
     if (habit.dayOfMonth !== undefined) updateData.dayOfMonth = habit.dayOfMonth;
     if (habit.notificationsEnabled !== undefined) updateData.notificationsEnabled = habit.notificationsEnabled ? 1 : 0;
     if (habit.notificationTime !== undefined) updateData.notificationTime = habit.notificationTime;
@@ -729,7 +727,7 @@ export async function pauseHabit(habitId: string, days: number): Promise<void> {
       if (h.id !== habitId) return h;
       return { ...h, isPaused: true, pauseUntil: pauseUntilDate.toISOString() };
     });
-    saveMemoryStore();
+    saveMemoryStore().catch(e => console.error(e));
     return;
   }
   
@@ -753,7 +751,7 @@ export async function resumeHabit(habitId: string): Promise<void> {
       if (h.id !== habitId) return h;
       return { ...h, isPaused: false, pauseUntil: undefined };
     });
-    saveMemoryStore();
+    saveMemoryStore().catch(e => console.error(e));
     return;
   }
   
@@ -780,7 +778,7 @@ export async function updateHabitNotifications(
         notificationTime: notificationTime || undefined 
       };
     });
-    saveMemoryStore();
+    saveMemoryStore().catch(e => console.error(e));
     return;
   }
   
@@ -890,7 +888,7 @@ export async function completeHabit(habit: Habit): Promise<HabitCompletion> {
       };
       stats.totalCompletions += 1;
       memoryStore.userStatsMap.set(targetProfileId, stats);
-      saveMemoryStore();
+      saveMemoryStore().catch(e => console.error(e));
       console.log('[STORAGE] Completed habit in memory:', habit.name);
       return completion;
     }
@@ -967,7 +965,7 @@ export async function uncompleteHabit(habitId: string, profileId?: string): Prom
       };
       stats.totalCompletions = Math.max(0, stats.totalCompletions - 1);
       memoryStore.userStatsMap.set(targetProfileId, stats);
-      saveMemoryStore();
+      saveMemoryStore().catch(e => console.error(e));
     }
     return;
   }
@@ -1021,7 +1019,7 @@ export async function saveReward(reward: Omit<Reward, "id" | "createdAt">): Prom
   
   if (useMemoryStore) {
     memoryStore.rewards.push(newReward);
-    saveMemoryStore();
+    saveMemoryStore().catch(e => console.error(e));
     console.log('[STORAGE] Saved reward to memory:', newReward.name);
     return newReward;
   }
@@ -1056,7 +1054,7 @@ export async function deleteReward(id: string): Promise<void> {
       const reward = memoryStore.rewards.find(r => r.id === id);
       if (reward && reward.profileId === (activeProfileId || 'default')) {
         memoryStore.rewards = memoryStore.rewards.filter(r => r.id !== id);
-        saveMemoryStore();
+        saveMemoryStore().catch(e => console.error(e));
       }
       return;
     }
@@ -1114,7 +1112,7 @@ export async function updateReward(reward: Partial<Pick<Reward, 'name' | 'icon' 
         
         return updated;
       });
-      saveMemoryStore();
+      saveMemoryStore().catch(e => console.error(e));
       return;
     }
     
@@ -1205,7 +1203,7 @@ export async function redeemReward(reward: Reward): Promise<RewardRedemption | n
     
     memoryStore.redemptions.push(redemption);
     memoryStore.walletBalances.set(targetProfileId, currentBalance - reward.cost);
-    saveMemoryStore();
+    saveMemoryStore().catch(e => console.error(e));
     console.log('[STORAGE] Redeemed reward in memory:', reward.name);
     return redemption;
   }
@@ -1270,7 +1268,7 @@ export async function setBalance(balance: number, profileId?: string): Promise<v
   if (useMemoryStore) {
     const targetId = profileId || activeProfileId || 'default';
     memoryStore.walletBalances.set(targetId, balance);
-    saveMemoryStore();
+    saveMemoryStore().catch(e => console.error(e));
     return;
   }
   
@@ -1445,6 +1443,7 @@ export interface UnlockedAchievement {
   id: string;
   trophyId: string;
   unlockedAt: string;
+  profileId?: string | null;
 }
 
 export async function getUnlockedAchievements(): Promise<UnlockedAchievement[]> {
@@ -1605,7 +1604,7 @@ export async function checkAndUnlockAchievements(
       }
     }
     
-    saveMemoryStore();
+    saveMemoryStore().catch(e => console.error(e));
     return newUnlocked;
   }
   
@@ -1897,7 +1896,7 @@ export async function savePurchasedSkill(skillId: string): Promise<boolean> {
     if (!skills.includes(skillId)) {
       skills.push(skillId);
       memoryStore.purchasedSkillsMap.set(targetId, skills);
-      saveMemoryStore();
+      saveMemoryStore().catch(e => console.error(e));
     }
     return true;
   }
@@ -1969,7 +1968,7 @@ export async function restoreStreakWithCoins(cost?: number): Promise<{ success: 
     const updatedStats = { ...stats };
     updatedStats.longestStreak = stats.longestStreak + 1;
     memoryStore.userStatsMap.set(targetProfile, updatedStats);
-    saveMemoryStore();
+    saveMemoryStore().catch(e => console.error(e));
     return { success: true };
   }
   
@@ -1997,7 +1996,7 @@ export async function addBonusPoints(amount: number, profileId?: string): Promis
   if (useMemoryStore) {
     const currentBalance = memoryStore.walletBalances.get(targetProfile) || 0;
     memoryStore.walletBalances.set(targetProfile, currentBalance + amount);
-    saveMemoryStore();
+    saveMemoryStore().catch(e => console.error(e));
     return;
   }
   
@@ -2014,7 +2013,7 @@ export async function applyPenaltyPoints(amount: number, profileId?: string): Pr
     const currentBalance = memoryStore.walletBalances.get(targetProfile) || 0;
     const actualDeduction = Math.min(amount, currentBalance);
     memoryStore.walletBalances.set(targetProfile, currentBalance - actualDeduction);
-    saveMemoryStore();
+    saveMemoryStore().catch(e => console.error(e));
     return;
   }
   
@@ -2037,16 +2036,16 @@ export async function resetStreak(profileId?: string): Promise<void> {
     };
     stats.longestStreak = 0;
     stats.longestSingleHabitStreak = 0;
-    stats.longestSingleHabitId = undefined;
+    stats.longestSingleHabitId = null;
     memoryStore.userStatsMap.set(targetProfile, stats);
-    saveMemoryStore();
+    saveMemoryStore().catch(e => console.error(e));
     return;
   }
   
   await db.updateUserStats({
     longestStreak: 0,
     longestSingleHabitStreak: 0,
-    longestSingleHabitId: undefined,
+    longestSingleHabitId: null,
   }, targetProfile);
 }
 
@@ -2056,4 +2055,26 @@ export function getStreakRestoreCost(currentStreak: number): number {
     return 500;
   }
   return Math.min(currentStreak * BASE_RESTORE_COST, MAX_RESTORE_STREAK * BASE_RESTORE_COST);
+}
+
+export async function logout(): Promise<void> {
+  await ensureDbReady();
+  
+  // Clear local SQLite database
+  const { clearDatabase } = await import('./db');
+  await clearDatabase();
+  
+  // Clear AsyncStorage / Onboarding variables
+  await AsyncStorage.removeItem(SESSION_KEY);
+  const { resetOnboarding } = await import('./onboarding-storage');
+  await resetOnboarding();
+  
+  // Clear profile cache
+  clearProfileState();
+  
+  // Sign out of Supabase
+  const { supabase } = await import('./supabase');
+  await supabase.auth.signOut();
+  
+  console.log('[STORAGE] User logged out and local data wiped successfully.');
 }

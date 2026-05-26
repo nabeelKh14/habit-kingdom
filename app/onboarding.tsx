@@ -10,6 +10,8 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  Keyboard,
+  ScrollView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -28,6 +30,7 @@ import Colors from "../constants/colors";
 import { createProfile, setActiveProfileId } from "../lib/storage";
 import { setOnboardingComplete, setActiveProfileId as saveActiveProfile, saveProfiles, getSavedProfiles } from "../lib/onboarding-storage";
 import { getProfiles } from "../lib/storage";
+import { supabase } from "../lib/supabase";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -40,6 +43,7 @@ interface OnboardingStep {
   iconColor: string;
   backgroundColor: string;
   isNameInput?: boolean;
+  isPhoneInput?: boolean;
   inputLabel?: string;
   inputPlaceholder?: string;
   nameKey?: 'child' | 'parent' | 'parent2';
@@ -57,6 +61,16 @@ const ONBOARDING_STEPS: OnboardingStep[] = [
   },
   {
     id: 2,
+    title: "Secure Your Kingdom 🔐",
+    description:
+      "Enter your email to sign in or create a safe account. We'll send a 6-digit verification code directly to your inbox!",
+    icon: "mail",
+    iconColor: Colors.primary,
+    backgroundColor: Colors.primary + "15",
+    isPhoneInput: true, // We keep the flag name or reuse it as isEmailInput for simplicity
+  },
+  {
+    id: 3,
     title: "Earn Kingdom Coins 💰",
     description:
       "Finish your daily tasks to collect coins! Brush teeth, read books, clean up - every habit earns you treasure!",
@@ -65,7 +79,7 @@ const ONBOARDING_STEPS: OnboardingStep[] = [
     backgroundColor: Colors.accent + "15",
   },
   {
-    id: 3,
+    id: 4,
     title: "Get Awesome Rewards 🎁",
     description:
       "Use your coins to unlock fun rewards! Screen time, treats, toys - pick what makes you happy!",
@@ -74,7 +88,7 @@ const ONBOARDING_STEPS: OnboardingStep[] = [
     backgroundColor: "#8B5CF6" + "15",
   },
   {
-    id: 4,
+    id: 5,
     title: "What's Your Name, Hero? ⭐",
     description:
       "Tell us your name so we can make this adventure yours!",
@@ -87,7 +101,7 @@ const ONBOARDING_STEPS: OnboardingStep[] = [
     nameKey: 'child',
   },
   {
-    id: 5,
+    id: 6,
     title: "Add Mom or Dad (Optional) 👨‍👩‍👧",
     description:
       "You can add up to 2 parents to help track your habits. Skip if you want!",
@@ -100,7 +114,7 @@ const ONBOARDING_STEPS: OnboardingStep[] = [
     nameKey: 'parent',
   },
   {
-    id: 6,
+    id: 7,
     title: "Add Another Parent? (Optional) 👨‍👩‍👧‍👦",
     description:
       "Want to add another parent? Skip if not needed!",
@@ -113,7 +127,7 @@ const ONBOARDING_STEPS: OnboardingStep[] = [
     nameKey: 'parent2',
   },
   {
-    id: 7,
+    id: 8,
     title: "Let's Go, Champion! 🚀",
     description:
       "Your habit kingdom is ready! Start your adventure and become a Habit Hero!",
@@ -143,20 +157,149 @@ function ProgressDot({ active, index }: { active: boolean; index: number }) {
   );
 }
 
+// Subcomponent: Email Verification View
+function EmailAuthView({ onLoginSuccess }: { onLoginSuccess: () => void }) {
+  const [email, setEmail] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  const handleSendOtp = async () => {
+    if (!email || !email.includes("@")) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const { error: authErr } = await supabase.auth.signInWithOtp({
+        email: email.trim(),
+      });
+      if (authErr) throw authErr;
+      setOtpSent(true);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (err: any) {
+      console.error("[AUTH] Send OTP error:", err);
+      setError(err.message || "Failed to send verification code. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    if (!otpCode || otpCode.trim().length < 6) {
+      setError("Please enter the 6-digit verification code.");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const { error: authErr } = await supabase.auth.verifyOtp({
+        email: email.trim(),
+        token: otpCode.trim(),
+        type: "email",
+      });
+      if (authErr) throw authErr;
+      
+      setSuccess(true);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      onLoginSuccess();
+    } catch (err: any) {
+      console.error("[AUTH] Verify OTP error:", err);
+      setError(err.message || "Incorrect verification code. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <View style={styles.phoneAuthContainer}>
+      {error && <Text style={styles.authErrorText}>{error}</Text>}
+      {success ? (
+        <View style={styles.successContainer}>
+          <Ionicons name="checkmark-circle-outline" size={48} color={Colors.success} />
+          <Text style={styles.successText}>Successfully Logged In!</Text>
+        </View>
+      ) : !otpSent ? (
+        <View style={styles.inputSection}>
+          <Text style={styles.nameInputLabel}>Email Address</Text>
+          <TextInput
+            style={styles.nameInput}
+            value={email}
+            onChangeText={setEmail}
+            placeholder="e.g. Emma@kingdom.com"
+            placeholderTextColor={Colors.textLight}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoFocus
+          />
+          <Pressable
+            style={[styles.authButton, loading && { opacity: 0.7 }]}
+            onPress={handleSendOtp}
+            disabled={loading}
+          >
+            <Text style={styles.authButtonText}>{loading ? "Sending..." : "Send Verification Code"}</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <View style={styles.inputSection}>
+          <Text style={styles.nameInputLabel}>Enter 6-Digit Code</Text>
+          <TextInput
+            style={styles.nameInput}
+            value={otpCode}
+            onChangeText={setOtpCode}
+            placeholder="000000"
+            placeholderTextColor={Colors.textLight}
+            keyboardType="number-pad"
+            maxLength={6}
+            autoFocus
+          />
+          <Pressable
+            style={[styles.authButton, loading && { opacity: 0.7 }]}
+            onPress={handleVerifyOtp}
+            disabled={loading}
+          >
+            <Text style={styles.authButtonText}>{loading ? "Verifying..." : "Verify & Sign In"}</Text>
+          </Pressable>
+          <Pressable
+            style={styles.resendButton}
+            onPress={() => setOtpSent(false)}
+            disabled={loading}
+          >
+            <Text style={styles.resendButtonText}>Change Email Address</Text>
+          </Pressable>
+        </View>
+      )}
+    </View>
+  );
+}
+
 // Onboarding Slide Component
 function OnboardingSlide({
   step,
   isActive,
   names,
   setNames,
+  phoneVerified,
+  setPhoneVerified,
 }: {
   step: OnboardingStep;
   isActive: boolean;
   names: { child: string; parent: string; parent2: string };
   setNames: React.Dispatch<React.SetStateAction<{ child: string; parent: string; parent2: string }>>;
+  phoneVerified: boolean;
+  setPhoneVerified: (val: boolean) => void;
 }) {
   return (
-    <View style={styles.slide}>
+    <ScrollView 
+      style={{ width: SCREEN_WIDTH }} 
+      contentContainerStyle={styles.slide}
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+    >
       <Animated.View
         entering={FadeIn.duration(400)}
         exiting={FadeOut.duration(200)}
@@ -167,7 +310,7 @@ function OnboardingSlide({
       >
         <Ionicons
           name={step.icon as any}
-          size={80}
+          size={Platform.OS === 'ios' ? 60 : 80}
           color={step.iconColor}
         />
       </Animated.View>
@@ -180,6 +323,10 @@ function OnboardingSlide({
         <Text style={styles.title}>{step.title}</Text>
         <Text style={styles.description}>{step.description}</Text>
         
+        {step.isPhoneInput && (
+          <EmailAuthView onLoginSuccess={() => setPhoneVerified(true)} />
+        )}
+
         {step.isNameInput && step.nameKey && (
           <View style={styles.nameInputContainer}>
             <Text style={styles.nameInputLabel}>{step.inputLabel}</Text>
@@ -191,11 +338,12 @@ function OnboardingSlide({
               onChangeText={(text) => setNames(prev => ({ ...prev, [step.nameKey!]: text }))}
               autoCapitalize="words"
               returnKeyType="done"
+              onSubmitEditing={() => Keyboard.dismiss()}
             />
           </View>
         )}
       </Animated.View>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -208,9 +356,11 @@ export default function OnboardingScreen({
   const insets = useSafeAreaInsets();
   const [currentIndex, setCurrentIndex] = useState(0);
   const [names, setNames] = useState({ child: '', parent: '', parent2: '' });
+  const [phoneVerified, setPhoneVerified] = useState(false);
   const flatListRef = useRef<FlatList>(null);
 
   const handleNext = async () => {
+    Keyboard.dismiss();
     if (currentIndex < ONBOARDING_STEPS.length - 1) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       flatListRef.current?.scrollToIndex({ index: currentIndex + 1 });
@@ -269,15 +419,28 @@ export default function OnboardingScreen({
     itemVisiblePercentThreshold: 50,
   }).current;
 
+  const isPhoneStep = ONBOARDING_STEPS[currentIndex]?.isPhoneInput;
   const isNameStep = ONBOARDING_STEPS[currentIndex]?.isNameInput;
   const isChildStep = ONBOARDING_STEPS[currentIndex]?.nameKey === 'child';
-  const isParentStep = ONBOARDING_STEPS[currentIndex]?.nameKey === 'parent';
-  const isParent2Step = ONBOARDING_STEPS[currentIndex]?.nameKey === 'parent2';
-  // Child step requires name, parent steps are optional (can skip)
-  const canProceed = !isNameStep || (isChildStep ? names.child.trim().length > 0 : true);
+
+  // Requirements to proceed:
+  // - If it's the phone step, phone must be verified.
+  // - If it's Emma's (child's) name step, must have a typed name.
+  // - All other slides are immediately unblocked.
+  const canProceed = 
+    (!isPhoneStep && !isNameStep) || 
+    (isPhoneStep && phoneVerified) || 
+    (isNameStep && (isChildStep ? names.child.trim().length > 0 : true));
 
   const renderItem = ({ item, index }: { item: OnboardingStep; index: number }) => (
-    <OnboardingSlide step={item} isActive={index === currentIndex} names={names} setNames={setNames} />
+    <OnboardingSlide 
+      step={item} 
+      isActive={index === currentIndex} 
+      names={names} 
+      setNames={setNames} 
+      phoneVerified={phoneVerified}
+      setPhoneVerified={setPhoneVerified}
+    />
   );
 
   const getItemLayout = (_: any, index: number) => ({
@@ -291,12 +454,12 @@ export default function OnboardingScreen({
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
-      behavior="padding"
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
       keyboardVerticalOffset={insets.top + 10}
     >
       <View style={[styles.container, { paddingTop: insets.top }]}>
-        {/* Skip Button */}
-        {!isLastStep && (
+        {/* Skip Button (only shown on non-auth, non-child-name slides) */}
+        {!isLastStep && !isPhoneStep && !isChildStep && (
           <Animated.View entering={FadeIn.duration(300)} style={styles.skipContainer}>
             <Pressable onPress={handleSkip} style={styles.skipButton}>
               <Text style={styles.skipText}>Skip</Text>
@@ -317,8 +480,7 @@ export default function OnboardingScreen({
           viewabilityConfig={viewabilityConfig}
           getItemLayout={getItemLayout}
           scrollEventThrottle={16}
-          scrollEnabled={!isNameStep}
-          contentContainerStyle={isNameStep ? { paddingBottom: 300 } : undefined}
+          scrollEnabled={canProceed} // Slide lock
         />
 
         {/* Progress Indicators */}
@@ -381,19 +543,19 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
   },
   slide: {
-    width: SCREEN_WIDTH,
+    flexGrow: 1,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 40,
-    paddingTop: 60,
+    paddingVertical: 20,
   },
   iconContainer: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 40,
+    marginBottom: 20,
   },
   textContainer: {
     alignItems: "center",
@@ -417,24 +579,27 @@ const styles = StyleSheet.create({
   },
   nameInputContainer: {
     width: "100%",
-    marginTop: 24,
+    marginTop: 16,
   },
   nameInputLabel: {
     fontSize: 14,
     fontFamily: "Nunito_700Bold",
     color: Colors.text,
     marginBottom: 8,
+    textAlign: "left",
+    alignSelf: "flex-start",
   },
   nameInput: {
     backgroundColor: Colors.surface,
     borderRadius: 16,
-    padding: 18,
+    padding: 14,
     fontSize: 18,
     fontFamily: "Nunito_500Medium",
     color: Colors.text,
     borderWidth: 2,
     borderColor: Colors.primary,
     textAlign: "center",
+    width: "100%",
   },
   progressContainer: {
     flexDirection: "row",
@@ -485,5 +650,59 @@ const styles = StyleSheet.create({
   },
   nextButtonTextDisabled: {
     color: Colors.textLight,
+  },
+  // Phone Auth specific styles
+  phoneAuthContainer: {
+    width: "100%",
+    marginTop: 20,
+    alignItems: "center",
+  },
+  inputSection: {
+    width: "100%",
+    alignItems: "center",
+  },
+  authButton: {
+    backgroundColor: Colors.primary,
+    borderRadius: 16,
+    paddingVertical: 16,
+    width: "100%",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 12,
+  },
+  authButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontFamily: "Nunito_700Bold",
+  },
+  resendButton: {
+    marginTop: 12,
+    padding: 8,
+  },
+  resendButtonText: {
+    color: Colors.primary,
+    fontSize: 14,
+    fontFamily: "Nunito_600SemiBold",
+  },
+  authErrorText: {
+    color: Colors.error,
+    fontSize: 14,
+    fontFamily: "Nunito_600SemiBold",
+    marginBottom: 10,
+    textAlign: "center",
+  },
+  successContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+    backgroundColor: Colors.success + "10",
+    borderRadius: 16,
+    width: "100%",
+  },
+  successText: {
+    color: Colors.success,
+    fontSize: 18,
+    fontFamily: "Nunito_700Bold",
+    marginTop: 10,
   },
 });

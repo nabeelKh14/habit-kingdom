@@ -81,7 +81,7 @@ export default function AddHabitScreen() {
           if (habit.scheduledTime) setScheduledTime(habit.scheduledTime);
           if (habit.daysOfWeek) setDaysOfWeek(habit.daysOfWeek);
           if (habit.dayOfMonth) setDayOfMonth(habit.dayOfMonth);
-          setNotificationsEnabled(habit.notificationsEnabled !== undefined ? habit.notificationsEnabled : true);
+          setNotificationsEnabled(habit.notificationsEnabled === false ? false : true);
           if (habit.notificationTime) setNotificationTime(habit.notificationTime);
           if (habit.profileId && habit.profileId !== '') initialProfileId = habit.profileId;
         }
@@ -143,11 +143,11 @@ export default function AddHabitScreen() {
           color: selectedColor,
           coinReward: parseInt(coinReward, 10) || 10,
           frequency,
-          scheduledTime: frequency !== 'once' ? scheduledTime : undefined,
-          daysOfWeek: frequency === 'weekly' ? daysOfWeek : undefined,
-          dayOfMonth: frequency === 'monthly' ? dayOfMonth : undefined,
+          scheduledTime: frequency !== 'once' ? scheduledTime : null,
+          daysOfWeek: frequency === 'weekly' ? daysOfWeek : null,
+          dayOfMonth: frequency === 'monthly' ? dayOfMonth : null,
           notificationsEnabled: notificationsEnabled && frequency !== 'once',
-          notificationTime: notificationsEnabled && frequency !== 'once' ? notificationTime : undefined,
+          notificationTime: notificationsEnabled && frequency !== 'once' ? notificationTime : null,
           profileId: selectedProfileId,
         });
         

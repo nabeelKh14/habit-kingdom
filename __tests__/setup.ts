@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock environment
-process.env.NODE_ENV = 'test';
+(process.env as any).NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-secret-key-for-testing-only';
 
 // Mock expo-sqlite
