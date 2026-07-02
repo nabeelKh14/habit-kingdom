@@ -5,12 +5,21 @@ import * as schema from "../shared/schema";
 import { runMigrations } from "./migrations";
 
 let db: ExpoSQLiteDatabase<typeof schema> | null = null;
+type DbInstance = ExpoSQLiteDatabase<typeof schema>;
 
-export function getDbInstance(): ExpoSQLiteDatabase<typeof schema> | null {
+export function getAvailableDb(): DbInstance {
+  const instance = getDbInstance();
+  if (instance) {
+    return instance;
+  }
+  throw new Error('Local database is not available yet');
+}
+
+export function getDbInstance(): DbInstance | null {
   return db;
 }
 
-export async function getDatabase(): Promise<ExpoSQLiteDatabase<typeof schema>> {
+export async function getDatabase(): Promise<DbInstance> {
   if (db) return db;
 
   try {
@@ -67,16 +76,23 @@ export async function insertProfile(profile: {
   createdAt: string;
 }): Promise<void> {
   const database = await getDatabase();
+  const profileType = profile.type as "child" | "parent";
+  if (profileType !== "child" && profileType !== "parent") {
+    throw new Error(`Invalid profile type: ${profile.type}`);
+  }
+
   await database.insert(schema.profiles).values({
     ...profile,
-    type: profile.type as "child" | "parent",
+    type: profileType,
   } as typeof schema.profiles.$inferInsert);
-  await database.insert(schema.wallet).values({ profileId: profile.id, balance: 0 }).onConflictDoNothing();
+  const now = new Date().toISOString();
+  await database.insert(schema.wallet).values({ profileId: profile.id, balance: 0, createdAt: now }).onConflictDoNothing();
   await database.insert(schema.userStats).values({
     profileId: profile.id,
     totalCompletions: 0,
     longestStreak: 0,
     longestSingleHabitStreak: 0,
+    createdAt: now,
   }).onConflictDoNothing();
 }
 
@@ -364,6 +380,7 @@ export async function insertCompletion(completion: {
   coinReward: number;
   completedAt: string;
   profileId: string;
+  createdAt: string;
 }): Promise<void> {
   const database = await getDatabase();
   await database.insert(schema.completions).values(completion);
@@ -410,6 +427,7 @@ export async function insertRedemption(redemption: {
   cost: number;
   redeemedAt: string;
   profileId: string;
+  createdAt: string;
 }): Promise<void> {
   const database = await getDatabase();
   await database.insert(schema.redemptions).values(redemption);
@@ -468,6 +486,7 @@ export async function insertAchievement(achievement: {
   trophyId: string;
   unlockedAt: string;
   profileId: string;
+  createdAt: string;
 }): Promise<void> {
   const database = await getDatabase();
   await database.insert(schema.achievements).values(achievement).onConflictDoNothing();
@@ -527,6 +546,7 @@ export async function updateUserStats(
     longestStreak: 0,
     longestSingleHabitStreak: 0,
     longestSingleHabitId: null,
+    createdAt: new Date().toISOString(),
   };
 
   // Calculate new values
@@ -554,6 +574,7 @@ export async function updateUserStats(
       longestStreak: newLongestStreak,
       longestSingleHabitStreak: newLongestSingleHabitStreak,
       longestSingleHabitId: newLongestSingleHabitId,
+      createdAt: existing.createdAt,
     })
     .onConflictDoUpdate({
       target: schema.userStats.profileId,
@@ -587,6 +608,7 @@ export async function insertPurchasedSkill(skill: {
   skillId: string;
   profileId: string;
   purchasedAt: string;
+  createdAt: string;
 }): Promise<boolean> {
   const database = await getDatabase();
   try {

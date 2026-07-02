@@ -4,16 +4,25 @@ import type { Habit } from './storage';
 import { isHabitPaused } from './storage';
 import { isEnabled } from './feature-flags';
 
-// Configure notification handling
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+let _initialized = false;
+
+export function initNotifications(): void {
+  if (_initialized || Platform.OS === 'web') return;
+  try {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+        shouldShowBanner: true,
+        shouldShowList: true,
+      }),
+    });
+    _initialized = true;
+  } catch (e) {
+    console.warn('[Notifications] Handler setup failed:', e);
+  }
+}
 
 const MOTIVATIONAL_MESSAGES = [
   "Time to build a great habit! 🌟 🐻",

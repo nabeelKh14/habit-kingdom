@@ -19,7 +19,6 @@ import {
 // We wrap it in a try/catch or conditional import if needed, 
 // but for now we just comment it out to prevent the instant crash on boot.
 // import * as Notifications from "expo-notifications";
-import { requestNotificationPermissions } from "../lib/notifications";
 import { isOnboardingComplete, setOnboardingComplete, getActiveProfileId } from "../lib/onboarding-storage";
 import { setActiveProfileId, getProfiles } from "../lib/storage";
 import { supabase } from "../lib/supabase";
@@ -55,13 +54,10 @@ function RootLayoutNav() {
   useEffect(() => {
     const checkAndRequestPermissions = async () => {
       try {
-        // Disabled for Expo Go compatibility
-        // const { status } = await Notifications.getPermissionsAsync();
-        // if (status !== 'granted') {
-        //  await requestNotificationPermissions();
-        // }
+        const { initNotifications } = await import("../lib/notifications");
+        initNotifications();
       } catch (e) {
-        console.warn("Notifications check failed (expected in Expo Go):", e);
+        console.warn("Notifications init skipped (expected in Expo Go):", e);
       }
     };
     checkAndRequestPermissions();

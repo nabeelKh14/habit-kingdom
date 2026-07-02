@@ -60,6 +60,7 @@ export default function AddHabitScreen() {
   // Load habit data for edit mode
   useEffect(() => {
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editHabitId]);
 
   const loadData = async () => {

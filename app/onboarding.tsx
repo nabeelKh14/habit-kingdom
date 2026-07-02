@@ -29,7 +29,6 @@ import * as Haptics from "expo-haptics";
 import Colors from "../constants/colors";
 import { createProfile, setActiveProfileId } from "../lib/storage";
 import { setOnboardingComplete, setActiveProfileId as saveActiveProfile, saveProfiles, getSavedProfiles } from "../lib/onboarding-storage";
-import { getProfiles } from "../lib/storage";
 import { supabase } from "../lib/supabase";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");

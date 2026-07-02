@@ -329,7 +329,12 @@ export default function RewardsScreen() {
         withTiming(0, { duration: 0 })
       );
       
-      await redeemReward(reward);
+      const redemption = await redeemReward(reward);
+      if (!redemption) {
+        setShowCelebration(false);
+        Alert.alert('Not Enough Coins', `You need ${reward.cost} coins to redeem this reward. Complete more habits to earn coins!`);
+        return;
+      }
       await loadData();
       
       // Hide celebration after animation

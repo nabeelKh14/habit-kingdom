@@ -16,7 +16,7 @@ import { Feather, Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import * as Haptics from "expo-haptics";
 import Colors from "../constants/colors";
-import { saveReward, getRewards, updateReward as updateRewardStorage, type Reward, getProfiles, type Profile } from "../lib/storage";
+import { saveReward, getRewards, updateReward as updateRewardStorage, getProfiles, type Profile } from "../lib/storage";
 import { getActiveProfileId } from "../lib/onboarding-storage";
 import { REWARD_ICONS, REWARD_COLORS } from "../lib/habitIcons";
 
@@ -39,6 +39,7 @@ export default function AddRewardScreen() {
   // Load reward data for edit mode
   useEffect(() => {
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editRewardId]);
 
   const loadData = async () => {

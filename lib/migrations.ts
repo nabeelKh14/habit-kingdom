@@ -1,6 +1,6 @@
 import * as SQLite from "expo-sqlite";
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 export interface Migration {
   version: number;
@@ -239,6 +239,83 @@ export const MIGRATIONS: Migration[] = [
       `);
       await db.execAsync(`DROP TABLE purchased_skills;`);
       await db.execAsync(`ALTER TABLE purchased_skills_old RENAME TO purchased_skills;`);
+    },
+  },
+  {
+    version: 4,
+    up: async (db: SQLite.SQLiteDatabase) => {
+      // v3 -> v4: Add updated_at columns for conflict resolution & incremental sync
+      const tables = [
+        'profiles', 'habits', 'rewards', 'completions', 
+        'redemptions', 'wallet', 'achievements', 'user_stats', 'purchased_skills'
+      ];
+      
+      for (const table of tables) {
+        try {
+          await db.execAsync(`ALTER TABLE ${table} ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
+        } catch (e: any) {
+          if (!e.message?.includes('duplicate column')) throw e;
+        }
+      }
+      
+      // Create trigger to auto-update updated_at on changes
+      const triggers = [
+        { table: 'profiles', cols: 'name, type' },
+        { table: 'habits', cols: 'name, icon, coinReward, color, frequency, scheduledTime, daysOfWeek, dayOfMonth, isPaused, pauseUntil, notificationsEnabled, notificationTime, profileId, deletedAt' },
+        { table: 'rewards', cols: 'name, icon, cost, color, profileId, deletedAt' },
+        { table: 'completions', cols: 'habitId, habitName, coinReward, completedAt, profileId' },
+        { table: 'redemptions', cols: 'rewardId, rewardName, cost, redeemedAt, profileId' },
+        { table: 'wallet', cols: 'balance' },
+        { table: 'achievements', cols: 'trophyId, unlockedAt, profileId' },
+        { table: 'user_stats', cols: 'totalCompletions, longestStreak, longestSingleHabitStreak, longestSingleHabitId' },
+        { table: 'purchased_skills', cols: 'skillId, profileId, purchasedAt' },
+      ];
+      
+      for (const t of triggers) {
+        await db.execAsync(`
+          CREATE TRIGGER IF NOT EXISTS update_${t.table}_updated_at
+          AFTER UPDATE ON ${t.table}
+          BEGIN
+            UPDATE ${t.table} SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+          END;
+        `);
+      }
+      
+      // Special trigger for wallet (uses profileId as PK)
+      await db.execAsync(`
+        CREATE TRIGGER IF NOT EXISTS update_wallet_updated_at
+        AFTER UPDATE ON wallet
+        BEGIN
+          UPDATE wallet SET updated_at = CURRENT_TIMESTAMP WHERE profileId = NEW.profileId;
+        END;
+      `);
+      
+      // Special trigger for user_stats (uses profileId as PK)
+      await db.execAsync(`
+        CREATE TRIGGER IF NOT EXISTS update_user_stats_updated_at
+        AFTER UPDATE ON user_stats
+        BEGIN
+          UPDATE user_stats SET updated_at = CURRENT_TIMESTAMP WHERE profileId = NEW.profileId;
+        END;
+      `);
+      
+      console.log('[Migrations v4] Added updated_at columns and triggers');
+    },
+    down: async (db: SQLite.SQLiteDatabase) => {
+      // v4 -> v3: Remove updated_at columns and triggers
+      const tables = [
+        'profiles', 'habits', 'rewards', 'completions', 
+        'redemptions', 'wallet', 'achievements', 'user_stats', 'purchased_skills'
+      ];
+      
+      for (const table of tables) {
+        await db.execAsync(`DROP TRIGGER IF EXISTS update_${table}_updated_at;`);
+        // Note: SQLite doesn't support DROP COLUMN easily, so we leave the column
+        // but it won't be updated anymore
+      }
+      
+      await db.execAsync(`DROP TRIGGER IF EXISTS update_wallet_updated_at;`);
+      await db.execAsync(`DROP TRIGGER IF EXISTS update_user_stats_updated_at;`);
     },
   },
 ];

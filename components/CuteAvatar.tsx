@@ -171,9 +171,7 @@ export default function CuteAvatar({ level = 1, size = 140, equippedSkills = [],
     transform: [{ translateY: bounceY.value }],
   }));
 
-  const eyeStyle = useAnimatedStyle(() => ({
-    transform: [{ scaleY: eyeBlink.value }],
-  }));
+  // eyeStyle intentionally removed — unused variable
 
   const sparkleStyle = useAnimatedStyle(() => ({
     transform: [{ rotate: `${sparkleRotate.value}deg` }],

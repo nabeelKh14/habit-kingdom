@@ -1,4 +1,5 @@
 ﻿import * as Crypto from "expo-crypto";
+import { EventEmitter } from "fbemitter";
 import * as db from "./db";
 import { withTransaction, getDatabase } from "./db";
 import { validateHabitInput, validateRewardInput, validateCompletionInput, validateRedemptionInput, validateProfileInput } from "./validation";
@@ -12,6 +13,83 @@ let dbInitPromise: Promise<void> | null = null;
 
 const SESSION_KEY = 'habit_kingdom_storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// ==================== MUTATION EVENT EMITTER ====================
+// Emits events whenever local data is mutated so sync.ts (or any subscriber)
+// can react with realtime/offline-queue logic without tight coupling.
+
+export type MutationTable =
+  | 'profiles'
+  | 'habits'
+  | 'rewards'
+  | 'completions'
+  | 'redemptions'
+  | 'wallet'
+  | 'achievements'
+  | 'user_stats'
+  | 'purchased_skills';
+
+export type MutationOp = 'upsert' | 'delete';
+
+export interface MutationEvent<T = any> {
+  table: MutationTable;
+  op: MutationOp;
+  /** Primary key (or composite key string) of the affected row */
+  id: string;
+  /** Full row payload for upserts; { id } or composite for deletes */
+  record: T;
+  /** Owning profile id, when applicable */
+  profileId?: string | null;
+  /** Local emission timestamp (ISO) */
+  at: string;
+  /** When true, the event was triggered by an inbound sync (do NOT re-push) */
+  fromRemote?: boolean;
+}
+
+const ALL_MUTATIONS_EVENT = 'mutation';
+
+export const mutationEmitter = new EventEmitter();
+
+/**
+ * Subscribe to ALL local mutation events. Returns an unsubscribe function.
+ */
+export function onMutation(listener: (event: MutationEvent) => void): () => void {
+  const sub = mutationEmitter.addListener(ALL_MUTATIONS_EVENT, listener);
+  return () => sub.remove();
+}
+
+/**
+ * Toggle for sync.ts: when applying remote changes, set true so emitted
+ * events are tagged `fromRemote: true` and the queue/pusher can skip them.
+ */
+let suppressRemoteRebroadcast = false;
+export function setRemoteApplyMode(enabled: boolean): void {
+  suppressRemoteRebroadcast = enabled;
+}
+
+function emitMutation<T>(
+  table: MutationTable,
+  op: MutationOp,
+  id: string,
+  record: T,
+  profileId?: string | null,
+): void {
+  try {
+    const event: MutationEvent<T> = {
+      table,
+      op,
+      id,
+      record,
+      profileId: profileId ?? null,
+      at: new Date().toISOString(),
+      fromRemote: suppressRemoteRebroadcast,
+    };
+    mutationEmitter.emit(ALL_MUTATIONS_EVENT, event);
+  } catch (err) {
+    // Listeners must never break storage operations
+    console.warn('[STORAGE] mutation listener error:', err);
+  }
+}
 
 // In-memory store for web fallback
 const memoryStore = {
@@ -116,8 +194,8 @@ async function ensureDbReady(): Promise<void> {
   return dbInitPromise;
 }
 
-// Initialize on first access
-ensureDbReady();
+// Initialize on first access — export the promise so consumers can await it
+export const dbReady: Promise<void> = ensureDbReady();
 
 // ==================== PROFILE MANAGEMENT ====================
 
@@ -316,7 +394,17 @@ export async function createProfile(name: string, type: 'child' | 'parent'): Pro
         createdAt: profile.createdAt,
       });
     }
-    
+
+    emitMutation('profiles', 'upsert', profile.id, profile, profile.id);
+    emitMutation('wallet', 'upsert', profile.id, { profileId: profile.id, balance: 0 }, profile.id);
+    emitMutation('user_stats', 'upsert', profile.id, {
+      profileId: profile.id,
+      totalCompletions: 0,
+      longestStreak: 0,
+      longestSingleHabitStreak: 0,
+      longestSingleHabitId: null,
+    }, profile.id);
+
     return profile;
   } catch (error) {
     console.error('[ERROR] createProfile failed:', error);
@@ -345,10 +433,12 @@ export async function renameProfile(id: string, name: string): Promise<void> {
         return { ...p, name: name.trim() };
       });
       saveMemoryStore().catch(e => console.error(e));
+      emitMutation('profiles', 'upsert', id, { id, name: name.trim() }, id);
       return;
     }
     
     await db.updateProfile(id, name);
+    emitMutation('profiles', 'upsert', id, { id, name: name.trim() }, id);
   } catch (error) {
     console.error('[ERROR] renameProfile failed:', error);
     throw error instanceof Error ? error : new Error('Failed to rename profile');
@@ -383,10 +473,12 @@ export async function removeProfile(id: string): Promise<void> {
         memoryStore.activeProfileId = activeProfileId;
     }
     saveMemoryStore().catch(e => console.error(e));
+      emitMutation('profiles', 'delete', id, { id }, id);
       return;
     }
     
     await db.removeProfile(id);
+    emitMutation('profiles', 'delete', id, { id }, id);
   } catch (error) {
     console.error('[ERROR] removeProfile failed:', error);
     throw error instanceof Error ? error : new Error('Failed to remove profile');
@@ -566,13 +658,18 @@ export async function saveHabit(habit: Partial<Pick<Habit, 'frequency' | 'schedu
   };
   
   if (useMemoryStore) {
+    if (!newHabit.profileId) {
+      newHabit.profileId = activeProfileId || 'default';
+    }
     memoryStore.habits.push(newHabit);
     saveMemoryStore().catch(e => console.error(e));
     console.log('[STORAGE] Saved habit to memory:', newHabit.name);
+    emitMutation('habits', 'upsert', newHabit.id, newHabit, newHabit.profileId);
     return newHabit;
   }
   
     try {
+    const resolvedProfileId = newHabit.profileId || await getActiveProfileId() || 'default';
     await db.insertHabit({
       id: newHabit.id,
       name: newHabit.name,
@@ -586,8 +683,10 @@ export async function saveHabit(habit: Partial<Pick<Habit, 'frequency' | 'schedu
       dayOfMonth: newHabit.dayOfMonth === null ? undefined : newHabit.dayOfMonth,
       notificationsEnabled: newHabit.notificationsEnabled ? 1 : 0,
       notificationTime: newHabit.notificationTime === null ? undefined : newHabit.notificationTime,
-      profileId: newHabit.profileId || await getActiveProfileId() || 'default',
+      profileId: resolvedProfileId,
     });
+    newHabit.profileId = resolvedProfileId;
+    emitMutation('habits', 'upsert', newHabit.id, newHabit, resolvedProfileId);
     return newHabit;
   } catch (error) {
     console.error('[ERROR] insertHabit failed:', error);
@@ -609,6 +708,7 @@ export async function deleteHabit(id: string): Promise<void> {
       if (habit && habit.profileId === (activeProfileId || 'default')) {
         memoryStore.habits = memoryStore.habits.filter(h => h.id !== id);
         saveMemoryStore().catch(e => console.error(e));
+        emitMutation('habits', 'delete', id, { id }, habit.profileId);
       }
       return;
     }
@@ -622,10 +722,13 @@ export async function deleteHabit(id: string): Promise<void> {
       }
     }
     
+    const ownerProfileId = await getActiveProfileId();
     if (isEnabled('SOFT_DELETE_ARCHIVE')) {
       await db.archiveHabit(id);
+      emitMutation('habits', 'upsert', id, { id, deletedAt: new Date().toISOString() }, ownerProfileId);
     } else {
       await db.removeHabit(id);
+      emitMutation('habits', 'delete', id, { id }, ownerProfileId);
     }
   } catch (error) {
     console.error('[ERROR] deleteHabit failed:', error);
@@ -658,6 +761,7 @@ export async function updateHabit(habit: any): Promise<void> {
     
     if (useMemoryStore) {
       // Update in-memory store
+      let updatedSnapshot: Habit | null = null;
       memoryStore.habits = memoryStore.habits.map(h => {
         if (h.id !== habit.id) return h;
         
@@ -674,9 +778,13 @@ export async function updateHabit(habit: any): Promise<void> {
         if (habit.notificationTime !== undefined) updated.notificationTime = habit.notificationTime;
         if (habit.profileId !== undefined && habit.profileId !== '') updated.profileId = habit.profileId;
         
+        updatedSnapshot = updated;
         return updated;
       });
       saveMemoryStore().catch(e => console.error(e));
+      if (updatedSnapshot) {
+        emitMutation('habits', 'upsert', habit.id, updatedSnapshot, (updatedSnapshot as Habit).profileId);
+      }
       return;
     }
     
@@ -695,6 +803,9 @@ export async function updateHabit(habit: any): Promise<void> {
     if (habit.profileId !== undefined && habit.profileId !== '') updateData.profileId = habit.profileId;
     
     await db.updateHabit(updateData);
+    const fresh = await db.getHabitById(habit.id);
+    if (fresh) emitMutation('habits', 'upsert', habit.id, rowToHabit(fresh), fresh.profileId);
+    else emitMutation('habits', 'upsert', habit.id, { id: habit.id, ...habit }, habit.profileId ?? null);
   } catch (error) {
     console.error('[ERROR] updateHabit failed:', error);
     throw error instanceof Error ? error : new Error('Failed to update habit');
@@ -723,11 +834,14 @@ export async function pauseHabit(habitId: string, days: number): Promise<void> {
   pauseUntilDate.setDate(pauseUntilDate.getDate() + days);
   
   if (useMemoryStore) {
+    let snapshot: Habit | null = null;
     memoryStore.habits = memoryStore.habits.map(h => {
       if (h.id !== habitId) return h;
-      return { ...h, isPaused: true, pauseUntil: pauseUntilDate.toISOString() };
+      snapshot = { ...h, isPaused: true, pauseUntil: pauseUntilDate.toISOString() };
+      return snapshot;
     });
     saveMemoryStore().catch(e => console.error(e));
+    if (snapshot) emitMutation('habits', 'upsert', habitId, snapshot, (snapshot as Habit).profileId);
     return;
   }
   
@@ -736,6 +850,8 @@ export async function pauseHabit(habitId: string, days: number): Promise<void> {
     isPaused: 1,
     pauseUntil: pauseUntilDate.toISOString(),
   });
+  const fresh = await db.getHabitById(habitId);
+  if (fresh) emitMutation('habits', 'upsert', habitId, rowToHabit(fresh), fresh.profileId);
 }
 
 export async function resumeHabit(habitId: string): Promise<void> {
@@ -747,11 +863,14 @@ export async function resumeHabit(habitId: string): Promise<void> {
   }
 
   if (useMemoryStore) {
+    let snapshot: Habit | null = null;
     memoryStore.habits = memoryStore.habits.map(h => {
       if (h.id !== habitId) return h;
-      return { ...h, isPaused: false, pauseUntil: undefined };
+      snapshot = { ...h, isPaused: false, pauseUntil: undefined };
+      return snapshot;
     });
     saveMemoryStore().catch(e => console.error(e));
+    if (snapshot) emitMutation('habits', 'upsert', habitId, snapshot, (snapshot as Habit).profileId);
     return;
   }
   
@@ -760,6 +879,8 @@ export async function resumeHabit(habitId: string): Promise<void> {
     isPaused: 0,
     pauseUntil: undefined,
   });
+  const fresh = await db.getHabitById(habitId);
+  if (fresh) emitMutation('habits', 'upsert', habitId, rowToHabit(fresh), fresh.profileId);
 }
 
 export async function updateHabitNotifications(
@@ -770,15 +891,18 @@ export async function updateHabitNotifications(
   await ensureDbReady();
   
   if (useMemoryStore) {
+    let snapshot: Habit | null = null;
     memoryStore.habits = memoryStore.habits.map(h => {
       if (h.id !== habitId) return h;
-      return { 
+      snapshot = { 
         ...h, 
         notificationsEnabled, 
         notificationTime: notificationTime || undefined 
       };
+      return snapshot;
     });
     saveMemoryStore().catch(e => console.error(e));
+    if (snapshot) emitMutation('habits', 'upsert', habitId, snapshot, (snapshot as Habit).profileId);
     return;
   }
   
@@ -787,6 +911,8 @@ export async function updateHabitNotifications(
     notificationsEnabled: notificationsEnabled ? 1 : 0,
     notificationTime: notificationTime || undefined,
   });
+  const fresh = await db.getHabitById(habitId);
+  if (fresh) emitMutation('habits', 'upsert', habitId, rowToHabit(fresh), fresh.profileId);
 }
 
 // ==================== COMPLETION OPERATIONS ====================
@@ -878,7 +1004,8 @@ export async function completeHabit(habit: Habit): Promise<HabitCompletion> {
       memoryStore.completions.push(completion);
       // Update per-profile wallet balance
       const currentBalance = memoryStore.walletBalances.get(targetProfileId) || 0;
-      memoryStore.walletBalances.set(targetProfileId, currentBalance + habit.coinReward);
+      const newBalance = currentBalance + habit.coinReward;
+      memoryStore.walletBalances.set(targetProfileId, newBalance);
       // Update per-profile user stats
       const stats = memoryStore.userStatsMap.get(targetProfileId) || {
         totalCompletions: 0,
@@ -890,6 +1017,9 @@ export async function completeHabit(habit: Habit): Promise<HabitCompletion> {
       memoryStore.userStatsMap.set(targetProfileId, stats);
       saveMemoryStore().catch(e => console.error(e));
       console.log('[STORAGE] Completed habit in memory:', habit.name);
+      emitMutation('completions', 'upsert', completion.id, completion, targetProfileId);
+      emitMutation('wallet', 'upsert', targetProfileId, { profileId: targetProfileId, balance: newBalance }, targetProfileId);
+      emitMutation('user_stats', 'upsert', targetProfileId, { profileId: targetProfileId, ...stats }, targetProfileId);
       return completion;
     }
 
@@ -906,6 +1036,7 @@ export async function completeHabit(habit: Habit): Promise<HabitCompletion> {
       habitName: habit.name,
       coinReward: habit.coinReward,
       completedAt: new Date().toISOString(),
+      profileId: targetProfileId,
     };
 
     // Insert completion
@@ -916,6 +1047,7 @@ export async function completeHabit(habit: Habit): Promise<HabitCompletion> {
       coinReward: completion.coinReward,
       completedAt: completion.completedAt,
       profileId: targetProfileId,
+      createdAt: new Date().toISOString(),
     });
 
     // Add coins
@@ -926,6 +1058,11 @@ export async function completeHabit(habit: Habit): Promise<HabitCompletion> {
       totalCompletions: 1,
     }, targetProfileId);
 
+    emitMutation('completions', 'upsert', completion.id, { ...completion, profileId: targetProfileId }, targetProfileId);
+    const balance = await db.getWalletBalance(targetProfileId);
+    emitMutation('wallet', 'upsert', targetProfileId, { profileId: targetProfileId, balance }, targetProfileId);
+    const updatedStats = await db.getUserStats(targetProfileId);
+    emitMutation('user_stats', 'upsert', targetProfileId, { ...updatedStats }, targetProfileId);
     return completion;
   });
 }
@@ -943,7 +1080,12 @@ export async function uncompleteHabit(habitId: string, profileId?: string): Prom
   const today = new Date().toISOString().split('T')[0];
 
   if (useMemoryStore) {
-    const targetProfileId = profileId || await getActiveProfileId();
+    const todayCompletionsForHabit = memoryStore.completions.filter(c => 
+      c.habitId === habitId && 
+      c.completedAt.split('T')[0] === today &&
+      c.profileId === targetProfileId
+    ).length;
+    // Only the first today completion exists (they can't duplicate)
     const idx = memoryStore.completions.findIndex(c => 
       c.habitId === habitId && 
       c.completedAt.split('T')[0] === today &&
@@ -955,7 +1097,8 @@ export async function uncompleteHabit(habitId: string, profileId?: string): Prom
       memoryStore.completions.splice(idx, 1);
       // Update per-profile wallet balance
       const currentBalance = memoryStore.walletBalances.get(targetProfileId) || 0;
-      memoryStore.walletBalances.set(targetProfileId, Math.max(0, currentBalance - completion.coinReward));
+      const newBalance = Math.max(0, currentBalance - completion.coinReward);
+      memoryStore.walletBalances.set(targetProfileId, newBalance);
       // Update per-profile user stats
       const stats = memoryStore.userStatsMap.get(targetProfileId) || {
         totalCompletions: 0,
@@ -966,6 +1109,9 @@ export async function uncompleteHabit(habitId: string, profileId?: string): Prom
       stats.totalCompletions = Math.max(0, stats.totalCompletions - 1);
       memoryStore.userStatsMap.set(targetProfileId, stats);
       saveMemoryStore().catch(e => console.error(e));
+      emitMutation('completions', 'delete', completion.id, { id: completion.id }, targetProfileId);
+      emitMutation('wallet', 'upsert', targetProfileId, { profileId: targetProfileId, balance: newBalance }, targetProfileId);
+      emitMutation('user_stats', 'upsert', targetProfileId, { profileId: targetProfileId, ...stats }, targetProfileId);
     }
     return;
   }
@@ -974,8 +1120,8 @@ export async function uncompleteHabit(habitId: string, profileId?: string): Prom
     const todayCompletion = await db.removeCompletionForHabitToday(habitId, targetProfileId, today);
     
     if (todayCompletion) {
-      // Refund coins
-      await db.addToWalletBalance(todayCompletion.coinReward, targetProfileId);
+      // Refund coins — actually deduct since we're uncompleting
+      await db.deductFromWalletBalance(todayCompletion.coinReward, targetProfileId);
       
       // Decrement stats
       const stats = await db.getUserStats(targetProfileId);
@@ -984,6 +1130,12 @@ export async function uncompleteHabit(habitId: string, profileId?: string): Prom
           totalCompletions: -1,
         }, targetProfileId);
       }
+
+      emitMutation('completions', 'delete', todayCompletion.id, { id: todayCompletion.id }, targetProfileId);
+      const balance = await db.getWalletBalance(targetProfileId);
+      emitMutation('wallet', 'upsert', targetProfileId, { profileId: targetProfileId, balance }, targetProfileId);
+      const updatedStats = await db.getUserStats(targetProfileId);
+      emitMutation('user_stats', 'upsert', targetProfileId, { ...updatedStats }, targetProfileId);
     }
   });
 }
@@ -1018,13 +1170,18 @@ export async function saveReward(reward: Omit<Reward, "id" | "createdAt">): Prom
   };
   
   if (useMemoryStore) {
+    if (!newReward.profileId) {
+      newReward.profileId = activeProfileId || 'default';
+    }
     memoryStore.rewards.push(newReward);
     saveMemoryStore().catch(e => console.error(e));
     console.log('[STORAGE] Saved reward to memory:', newReward.name);
+    emitMutation('rewards', 'upsert', newReward.id, newReward, newReward.profileId);
     return newReward;
   }
   
   try {
+    const resolvedProfileId = newReward.profileId || await getActiveProfileId();
     await db.insertReward({
       id: newReward.id,
       name: newReward.name,
@@ -1032,8 +1189,10 @@ export async function saveReward(reward: Omit<Reward, "id" | "createdAt">): Prom
       cost: newReward.cost,
       color: newReward.color,
       createdAt: newReward.createdAt,
-      profileId: newReward.profileId || await getActiveProfileId(),
+      profileId: resolvedProfileId,
     });
+    newReward.profileId = resolvedProfileId;
+    emitMutation('rewards', 'upsert', newReward.id, newReward, resolvedProfileId);
     return newReward;
   } catch (error) {
     console.error('[ERROR] insertReward failed:', error);
@@ -1055,6 +1214,7 @@ export async function deleteReward(id: string): Promise<void> {
       if (reward && reward.profileId === (activeProfileId || 'default')) {
         memoryStore.rewards = memoryStore.rewards.filter(r => r.id !== id);
         saveMemoryStore().catch(e => console.error(e));
+        emitMutation('rewards', 'delete', id, { id }, reward.profileId);
       }
       return;
     }
@@ -1068,10 +1228,13 @@ export async function deleteReward(id: string): Promise<void> {
       }
     }
     
+    const ownerProfileId = await getActiveProfileId();
     if (isEnabled('SOFT_DELETE_ARCHIVE')) {
       await db.archiveReward(id);
+      emitMutation('rewards', 'upsert', id, { id, deletedAt: new Date().toISOString() }, ownerProfileId);
     } else {
       await db.removeReward(id);
+      emitMutation('rewards', 'delete', id, { id }, ownerProfileId);
     }
   } catch (error) {
     console.error('[ERROR] deleteReward failed:', error);
@@ -1100,6 +1263,7 @@ export async function updateReward(reward: Partial<Pick<Reward, 'name' | 'icon' 
     
     if (useMemoryStore) {
       // Update in-memory store
+      let snapshot: Reward | null = null;
       memoryStore.rewards = memoryStore.rewards.map(r => {
         if (r.id !== reward.id) return r;
         
@@ -1110,9 +1274,11 @@ export async function updateReward(reward: Partial<Pick<Reward, 'name' | 'icon' 
         if (reward.color !== undefined) updated.color = reward.color;
         if (reward.profileId !== undefined) updated.profileId = reward.profileId;
         
+        snapshot = updated;
         return updated;
       });
       saveMemoryStore().catch(e => console.error(e));
+      if (snapshot) emitMutation('rewards', 'upsert', reward.id, snapshot, (snapshot as Reward).profileId);
       return;
     }
     
@@ -1127,6 +1293,9 @@ export async function updateReward(reward: Partial<Pick<Reward, 'name' | 'icon' 
     if (Object.keys(updateData).length === 0) return;
     
     await db.updateReward(updateData);
+    const fresh = await db.getRewardById(reward.id);
+    if (fresh) emitMutation('rewards', 'upsert', reward.id, rowToReward(fresh), fresh.profileId);
+    else emitMutation('rewards', 'upsert', reward.id, { ...reward }, reward.profileId ?? null);
   } catch (error) {
     console.error('[ERROR] updateReward failed:', error);
     throw error instanceof Error ? error : new Error('Failed to update reward');
@@ -1202,9 +1371,12 @@ export async function redeemReward(reward: Reward): Promise<RewardRedemption | n
     };
     
     memoryStore.redemptions.push(redemption);
-    memoryStore.walletBalances.set(targetProfileId, currentBalance - reward.cost);
+    const newBalance = currentBalance - reward.cost;
+    memoryStore.walletBalances.set(targetProfileId, newBalance);
     saveMemoryStore().catch(e => console.error(e));
     console.log('[STORAGE] Redeemed reward in memory:', reward.name);
+    emitMutation('redemptions', 'upsert', redemption.id, redemption, targetProfileId);
+    emitMutation('wallet', 'upsert', targetProfileId, { profileId: targetProfileId, balance: newBalance }, targetProfileId);
     return redemption;
   }
 
@@ -1220,6 +1392,7 @@ export async function redeemReward(reward: Reward): Promise<RewardRedemption | n
       rewardName: reward.name,
       cost: reward.cost,
       redeemedAt: new Date().toISOString(),
+      profileId: targetProfileId,
     };
     
     await db.insertRedemption({
@@ -1229,10 +1402,14 @@ export async function redeemReward(reward: Reward): Promise<RewardRedemption | n
       cost: redemption.cost,
       redeemedAt: redemption.redeemedAt,
       profileId: targetProfileId,
+      createdAt: new Date().toISOString(),
     });
     
     await db.deductFromWalletBalance(reward.cost, targetProfileId);
 
+    emitMutation('redemptions', 'upsert', redemption.id, redemption, targetProfileId);
+    const newBalance = await db.getWalletBalance(targetProfileId);
+    emitMutation('wallet', 'upsert', targetProfileId, { profileId: targetProfileId, balance: newBalance }, targetProfileId);
     return redemption;
   });
 }
@@ -1269,11 +1446,14 @@ export async function setBalance(balance: number, profileId?: string): Promise<v
     const targetId = profileId || activeProfileId || 'default';
     memoryStore.walletBalances.set(targetId, balance);
     saveMemoryStore().catch(e => console.error(e));
+    emitMutation('wallet', 'upsert', targetId, { profileId: targetId, balance }, targetId);
     return;
   }
   
   try {
-    await db.setWalletBalance(balance, profileId || await getActiveProfileId());
+    const targetId = profileId || await getActiveProfileId();
+    await db.setWalletBalance(balance, targetId);
+    emitMutation('wallet', 'upsert', targetId, { profileId: targetId, balance }, targetId);
   } catch (error) {
     console.error('[ERROR] setBalance failed:', error);
     throw error instanceof Error ? error : new Error('Failed to set balance');
@@ -1594,17 +1774,20 @@ export async function checkAndUnlockAchievements(
       }
       
       if (shouldUnlock) {
-        memoryStore.unlockedAchievements.push({
+        const achievement = {
           id: Crypto.randomUUID(),
           trophyId: trophy.id,
           unlockedAt: new Date().toISOString(),
           profileId,
-        });
+        };
+        memoryStore.unlockedAchievements.push(achievement);
+        emitMutation('achievements', 'upsert', achievement.id, achievement, profileId);
         newUnlocked.push(trophy);
       }
     }
     
     saveMemoryStore().catch(e => console.error(e));
+    emitMutation('user_stats', 'upsert', profileId, { profileId, ...updatedStats }, profileId);
     return newUnlocked;
   }
   
@@ -1654,16 +1837,20 @@ export async function checkAndUnlockAchievements(
       }
 
       if (shouldUnlock) {
-        await db.insertAchievement({
+        const achievement = {
           id: Crypto.randomUUID(),
           trophyId: trophy.id,
           unlockedAt: new Date().toISOString(),
           profileId,
-        });
+          createdAt: new Date().toISOString(),
+        };
+        await db.insertAchievement(achievement);
+        emitMutation('achievements', 'upsert', achievement.id, achievement, profileId);
         newUnlocked.push(trophy);
       }
     }
 
+    emitMutation('user_stats', 'upsert', profileId, { ...updatedStats }, profileId);
     return newUnlocked;
   });
 }
@@ -1897,17 +2084,25 @@ export async function savePurchasedSkill(skillId: string): Promise<boolean> {
       skills.push(skillId);
       memoryStore.purchasedSkillsMap.set(targetId, skills);
       saveMemoryStore().catch(e => console.error(e));
+      emitMutation('purchased_skills', 'upsert', `${targetId}:${skillId}`, { skillId, profileId: targetId, purchasedAt: new Date().toISOString() }, targetId);
     }
     return true;
   }
   
   try {
+    const targetId = await getActiveProfileId();
+    const purchasedAt = new Date().toISOString();
+    const skillRowId = Crypto.randomUUID();
     const result = await db.insertPurchasedSkill({
-      id: Crypto.randomUUID(),
+      id: skillRowId,
       skillId,
-      profileId: await getActiveProfileId(),
-      purchasedAt: new Date().toISOString(),
+      profileId: targetId,
+      purchasedAt,
+      createdAt: purchasedAt,
     });
+    if (result) {
+      emitMutation('purchased_skills', 'upsert', skillRowId, { id: skillRowId, skillId, profileId: targetId, purchasedAt }, targetId);
+    }
     return result;
   } catch (error) {
     console.error('[ERROR] savePurchasedSkill failed:', error);
@@ -1964,11 +2159,14 @@ export async function restoreStreakWithCoins(cost?: number): Promise<{ success: 
     if (currentBalance < calculatedCost) {
       return { success: false, error: 'INSUFFICIENT_BALANCE' };
     }
-    memoryStore.walletBalances.set(targetProfile, currentBalance - calculatedCost);
+    const newBalance = currentBalance - calculatedCost;
+    memoryStore.walletBalances.set(targetProfile, newBalance);
     const updatedStats = { ...stats };
     updatedStats.longestStreak = stats.longestStreak + 1;
     memoryStore.userStatsMap.set(targetProfile, updatedStats);
     saveMemoryStore().catch(e => console.error(e));
+    emitMutation('wallet', 'upsert', targetProfile, { profileId: targetProfile, balance: newBalance }, targetProfile);
+    emitMutation('user_stats', 'upsert', targetProfile, { profileId: targetProfile, ...updatedStats }, targetProfile);
     return { success: true };
   }
   
@@ -1983,6 +2181,10 @@ export async function restoreStreakWithCoins(cost?: number): Promise<{ success: 
       longestStreak: stats.longestStreak + 1,
     }, targetProfile);
     
+    const newBalance = await db.getWalletBalance(targetProfile);
+    emitMutation('wallet', 'upsert', targetProfile, { profileId: targetProfile, balance: newBalance }, targetProfile);
+    const updatedStats = await db.getUserStats(targetProfile);
+    emitMutation('user_stats', 'upsert', targetProfile, { ...updatedStats }, targetProfile);
     return { success: true };
   });
 }
@@ -1995,12 +2197,16 @@ export async function addBonusPoints(amount: number, profileId?: string): Promis
   
   if (useMemoryStore) {
     const currentBalance = memoryStore.walletBalances.get(targetProfile) || 0;
-    memoryStore.walletBalances.set(targetProfile, currentBalance + amount);
+    const newBalance = currentBalance + amount;
+    memoryStore.walletBalances.set(targetProfile, newBalance);
     saveMemoryStore().catch(e => console.error(e));
+    emitMutation('wallet', 'upsert', targetProfile, { profileId: targetProfile, balance: newBalance }, targetProfile);
     return;
   }
   
   await db.addToWalletBalance(amount, targetProfile);
+  const newBalance = await db.getWalletBalance(targetProfile);
+  emitMutation('wallet', 'upsert', targetProfile, { profileId: targetProfile, balance: newBalance }, targetProfile);
 }
 
 export async function applyPenaltyPoints(amount: number, profileId?: string): Promise<void> {
@@ -2012,14 +2218,18 @@ export async function applyPenaltyPoints(amount: number, profileId?: string): Pr
   if (useMemoryStore) {
     const currentBalance = memoryStore.walletBalances.get(targetProfile) || 0;
     const actualDeduction = Math.min(amount, currentBalance);
-    memoryStore.walletBalances.set(targetProfile, currentBalance - actualDeduction);
+    const newBalance = currentBalance - actualDeduction;
+    memoryStore.walletBalances.set(targetProfile, newBalance);
     saveMemoryStore().catch(e => console.error(e));
+    emitMutation('wallet', 'upsert', targetProfile, { profileId: targetProfile, balance: newBalance }, targetProfile);
     return;
   }
   
   const currentBalance = await db.getWalletBalance(targetProfile);
   const actualDeduction = Math.min(amount, currentBalance);
-  await db.setWalletBalance(currentBalance - actualDeduction, targetProfile);
+  const newBalance = currentBalance - actualDeduction;
+  await db.setWalletBalance(newBalance, targetProfile);
+  emitMutation('wallet', 'upsert', targetProfile, { profileId: targetProfile, balance: newBalance }, targetProfile);
 }
 
 export async function resetStreak(profileId?: string): Promise<void> {
@@ -2039,6 +2249,7 @@ export async function resetStreak(profileId?: string): Promise<void> {
     stats.longestSingleHabitId = null;
     memoryStore.userStatsMap.set(targetProfile, stats);
     saveMemoryStore().catch(e => console.error(e));
+    emitMutation('user_stats', 'upsert', targetProfile, { profileId: targetProfile, ...stats }, targetProfile);
     return;
   }
   
@@ -2047,6 +2258,8 @@ export async function resetStreak(profileId?: string): Promise<void> {
     longestSingleHabitStreak: 0,
     longestSingleHabitId: null,
   }, targetProfile);
+  const updatedStats = await db.getUserStats(targetProfile);
+  emitMutation('user_stats', 'upsert', targetProfile, { ...updatedStats }, targetProfile);
 }
 
 // Calculate streak restore cost (for UI display)
@@ -2055,6 +2268,391 @@ export function getStreakRestoreCost(currentStreak: number): number {
     return 500;
   }
   return Math.min(currentStreak * BASE_RESTORE_COST, MAX_RESTORE_STREAK * BASE_RESTORE_COST);
+}
+
+// ==================== REMOTE-APPLY HELPERS (for sync.ts) ====================
+// These intentionally bypass validation because the data has already been
+// validated by Supabase and is being mirrored locally. They flip
+// `suppressRemoteRebroadcast` so the resulting emitted events are tagged
+// `fromRemote: true` and the offline queue can ignore them.
+
+export interface RemoteRecord {
+  table: MutationTable;
+  /** Primary key (or composite key string for purchased_skills) */
+  id: string;
+  /** Owning profile id */
+  profileId?: string | null;
+  /** Full row payload from Supabase (snake_case-tolerant: we normalize) */
+  data: Record<string, any>;
+}
+
+function normalizeHabitRecord(row: Record<string, any>): {
+  id: string; name: string; icon: string; coinReward: number; color: string; createdAt: string;
+  frequency: string; scheduledTime?: string; daysOfWeek?: string; dayOfMonth?: number;
+  notificationsEnabled: number; notificationTime?: string; isPaused?: number; pauseUntil?: string; profileId: string;
+} {
+  return {
+    id: row.id,
+    name: row.name,
+    icon: row.icon,
+    coinReward: row.coinReward ?? row.coin_reward ?? 0,
+    color: row.color,
+    createdAt: row.createdAt ?? row.created_at ?? new Date().toISOString(),
+    frequency: row.frequency ?? 'once',
+    scheduledTime: row.scheduledTime ?? row.scheduled_time ?? undefined,
+    daysOfWeek: row.daysOfWeek ?? row.days_of_week ?? undefined,
+    dayOfMonth: row.dayOfMonth ?? row.day_of_month ?? undefined,
+    notificationsEnabled: (row.notificationsEnabled ?? row.notifications_enabled) ? 1 : 0,
+    notificationTime: row.notificationTime ?? row.notification_time ?? undefined,
+    isPaused: (row.isPaused ?? row.is_paused) ? 1 : 0,
+    pauseUntil: row.pauseUntil ?? row.pause_until ?? undefined,
+    profileId: row.profileId ?? row.profile_id,
+  };
+}
+
+function normalizeRewardRecord(row: Record<string, any>) {
+  return {
+    id: row.id,
+    name: row.name,
+    icon: row.icon,
+    cost: row.cost,
+    color: row.color,
+    createdAt: row.createdAt ?? row.created_at ?? new Date().toISOString(),
+    profileId: row.profileId ?? row.profile_id,
+  };
+}
+
+function normalizeCompletionRecord(row: Record<string, any>) {
+  return {
+    id: row.id,
+    habitId: row.habitId ?? row.habit_id,
+    habitName: row.habitName ?? row.habit_name,
+    coinReward: row.coinReward ?? row.coin_reward ?? 0,
+    completedAt: row.completedAt ?? row.completed_at ?? new Date().toISOString(),
+    profileId: row.profileId ?? row.profile_id,
+    createdAt: row.createdAt ?? row.created_at ?? new Date().toISOString(),
+  };
+}
+
+function normalizeRedemptionRecord(row: Record<string, any>) {
+  return {
+    id: row.id,
+    rewardId: row.rewardId ?? row.reward_id,
+    rewardName: row.rewardName ?? row.reward_name,
+    cost: row.cost,
+    redeemedAt: row.redeemedAt ?? row.redeemed_at ?? new Date().toISOString(),
+    profileId: row.profileId ?? row.profile_id,
+    createdAt: row.createdAt ?? row.created_at ?? new Date().toISOString(),
+  };
+}
+
+async function applyRemoteUpsertMemory(rec: RemoteRecord): Promise<void> {
+  switch (rec.table) {
+    case 'profiles': {
+      const profile: Profile = {
+        id: rec.data.id,
+        name: rec.data.name,
+        type: (rec.data.type as 'child' | 'parent') ?? 'child',
+        createdAt: rec.data.createdAt ?? rec.data.created_at ?? new Date().toISOString(),
+      };
+      const idx = memoryStore.profiles.findIndex(p => p.id === profile.id);
+      if (idx >= 0) memoryStore.profiles[idx] = profile;
+      else memoryStore.profiles.push(profile);
+      if (!memoryStore.walletBalances.has(profile.id)) memoryStore.walletBalances.set(profile.id, 0);
+      if (!memoryStore.userStatsMap.has(profile.id)) {
+        memoryStore.userStatsMap.set(profile.id, {
+          totalCompletions: 0, longestStreak: 0, longestSingleHabitStreak: 0, longestSingleHabitId: null,
+        });
+      }
+      return;
+    }
+    case 'habits': {
+      const h = normalizeHabitRecord(rec.data);
+      const habit: Habit = {
+        id: h.id, name: h.name, icon: h.icon, coinReward: h.coinReward, color: h.color, createdAt: h.createdAt,
+        frequency: h.frequency as Habit['frequency'],
+        scheduledTime: h.scheduledTime, dayOfMonth: h.dayOfMonth,
+        daysOfWeek: h.daysOfWeek ? (() => { try { return JSON.parse(h.daysOfWeek as any); } catch { return undefined; } })() : undefined,
+        notificationsEnabled: !!h.notificationsEnabled, notificationTime: h.notificationTime,
+        isPaused: !!h.isPaused, pauseUntil: h.pauseUntil, profileId: h.profileId,
+      };
+      const idx = memoryStore.habits.findIndex(x => x.id === habit.id);
+      if (idx >= 0) memoryStore.habits[idx] = habit;
+      else memoryStore.habits.push(habit);
+      return;
+    }
+    case 'rewards': {
+      const r = normalizeRewardRecord(rec.data);
+      const reward: Reward = { id: r.id, name: r.name, icon: r.icon, cost: r.cost, color: r.color, createdAt: r.createdAt, profileId: r.profileId };
+      const idx = memoryStore.rewards.findIndex(x => x.id === reward.id);
+      if (idx >= 0) memoryStore.rewards[idx] = reward;
+      else memoryStore.rewards.push(reward);
+      return;
+    }
+    case 'completions': {
+      const c = normalizeCompletionRecord(rec.data);
+      const completion: HabitCompletion = { id: c.id, habitId: c.habitId, habitName: c.habitName, coinReward: c.coinReward, completedAt: c.completedAt, profileId: c.profileId };
+      const idx = memoryStore.completions.findIndex(x => x.id === completion.id);
+      if (idx >= 0) memoryStore.completions[idx] = completion;
+      else memoryStore.completions.push(completion);
+      return;
+    }
+    case 'redemptions': {
+      const r = normalizeRedemptionRecord(rec.data);
+      const redemption: RewardRedemption = { id: r.id, rewardId: r.rewardId, rewardName: r.rewardName, cost: r.cost, redeemedAt: r.redeemedAt, profileId: r.profileId };
+      const idx = memoryStore.redemptions.findIndex(x => x.id === redemption.id);
+      if (idx >= 0) memoryStore.redemptions[idx] = redemption;
+      else memoryStore.redemptions.push(redemption);
+      return;
+    }
+    case 'wallet': {
+      const pid = rec.data.profileId ?? rec.data.profile_id ?? rec.profileId;
+      if (pid) memoryStore.walletBalances.set(pid, rec.data.balance ?? 0);
+      return;
+    }
+    case 'achievements': {
+      const a: UnlockedAchievement = {
+        id: rec.data.id,
+        trophyId: rec.data.trophyId ?? rec.data.trophy_id,
+        unlockedAt: rec.data.unlockedAt ?? rec.data.unlocked_at ?? new Date().toISOString(),
+        profileId: rec.data.profileId ?? rec.data.profile_id ?? null,
+      };
+      const idx = memoryStore.unlockedAchievements.findIndex(x => x.id === a.id);
+      if (idx >= 0) memoryStore.unlockedAchievements[idx] = a;
+      else memoryStore.unlockedAchievements.push(a);
+      return;
+    }
+    case 'user_stats': {
+      const pid = rec.data.profileId ?? rec.data.profile_id ?? rec.profileId;
+      if (!pid) return;
+      memoryStore.userStatsMap.set(pid, {
+        totalCompletions: rec.data.totalCompletions ?? rec.data.total_completions ?? 0,
+        longestStreak: rec.data.longestStreak ?? rec.data.longest_streak ?? 0,
+        longestSingleHabitStreak: rec.data.longestSingleHabitStreak ?? rec.data.longest_single_habit_streak ?? 0,
+        longestSingleHabitId: rec.data.longestSingleHabitId ?? rec.data.longest_single_habit_id ?? null,
+      });
+      return;
+    }
+    case 'purchased_skills': {
+      const pid = rec.data.profileId ?? rec.data.profile_id ?? rec.profileId;
+      const skillId = rec.data.skillId ?? rec.data.skill_id;
+      if (!pid || !skillId) return;
+      const list = memoryStore.purchasedSkillsMap.get(pid) || [];
+      if (!list.includes(skillId)) list.push(skillId);
+      memoryStore.purchasedSkillsMap.set(pid, list);
+      return;
+    }
+  }
+}
+
+async function applyRemoteDeleteMemory(rec: RemoteRecord): Promise<void> {
+  switch (rec.table) {
+    case 'profiles':
+      memoryStore.profiles = memoryStore.profiles.filter(p => p.id !== rec.id);
+      memoryStore.walletBalances.delete(rec.id);
+      memoryStore.userStatsMap.delete(rec.id);
+      memoryStore.purchasedSkillsMap.delete(rec.id);
+      memoryStore.habits = memoryStore.habits.filter(h => h.profileId !== rec.id);
+      memoryStore.rewards = memoryStore.rewards.filter(r => r.profileId !== rec.id);
+      memoryStore.completions = memoryStore.completions.filter(c => c.profileId !== rec.id);
+      memoryStore.redemptions = memoryStore.redemptions.filter(r => r.profileId !== rec.id);
+      return;
+    case 'habits':
+      memoryStore.habits = memoryStore.habits.filter(h => h.id !== rec.id);
+      return;
+    case 'rewards':
+      memoryStore.rewards = memoryStore.rewards.filter(r => r.id !== rec.id);
+      return;
+    case 'completions':
+      memoryStore.completions = memoryStore.completions.filter(c => c.id !== rec.id);
+      return;
+    case 'redemptions':
+      memoryStore.redemptions = memoryStore.redemptions.filter(r => r.id !== rec.id);
+      return;
+    case 'achievements':
+      memoryStore.unlockedAchievements = memoryStore.unlockedAchievements.filter(a => a.id !== rec.id);
+      return;
+    case 'wallet':
+    case 'user_stats':
+    case 'purchased_skills':
+      // No-op: these are owned rows that get reset rather than deleted
+      return;
+  }
+}
+
+async function applyRemoteUpsertSqlite(rec: RemoteRecord): Promise<void> {
+  switch (rec.table) {
+    case 'profiles': {
+      const existing = (await db.getAllProfiles()).find(p => p.id === rec.data.id);
+      if (existing) {
+        if (rec.data.name && rec.data.name !== existing.name) {
+          await db.updateProfile(rec.data.id, rec.data.name);
+        }
+      } else {
+        await db.insertProfile({
+          id: rec.data.id,
+          name: rec.data.name,
+          type: rec.data.type ?? 'child',
+          createdAt: rec.data.createdAt ?? rec.data.created_at ?? new Date().toISOString(),
+        });
+      }
+      return;
+    }
+    case 'habits': {
+      const h = normalizeHabitRecord(rec.data);
+      const existing = await db.getHabitById(h.id);
+      if (existing) {
+        await db.updateHabit({
+          id: h.id, name: h.name, icon: h.icon, coinReward: h.coinReward, color: h.color,
+          frequency: h.frequency, scheduledTime: h.scheduledTime, daysOfWeek: h.daysOfWeek,
+          dayOfMonth: h.dayOfMonth, notificationsEnabled: h.notificationsEnabled,
+          notificationTime: h.notificationTime, isPaused: h.isPaused, pauseUntil: h.pauseUntil,
+          profileId: h.profileId,
+        });
+      } else {
+        await db.insertHabit({
+          id: h.id, name: h.name, icon: h.icon, coinReward: h.coinReward, color: h.color,
+          createdAt: h.createdAt, frequency: h.frequency, scheduledTime: h.scheduledTime,
+          daysOfWeek: h.daysOfWeek, dayOfMonth: h.dayOfMonth,
+          notificationsEnabled: h.notificationsEnabled, notificationTime: h.notificationTime,
+          profileId: h.profileId,
+        });
+      }
+      return;
+    }
+    case 'rewards': {
+      const r = normalizeRewardRecord(rec.data);
+      const existing = await db.getRewardById(r.id);
+      if (existing) {
+        await db.updateReward({ id: r.id, name: r.name, icon: r.icon, cost: r.cost, color: r.color, profileId: r.profileId });
+      } else {
+        await db.insertReward({ id: r.id, name: r.name, icon: r.icon, cost: r.cost, color: r.color, createdAt: r.createdAt, profileId: r.profileId });
+      }
+      return;
+    }
+    case 'completions': {
+      const c = normalizeCompletionRecord(rec.data);
+      try {
+        await db.insertCompletion({ id: c.id, habitId: c.habitId, habitName: c.habitName, coinReward: c.coinReward, completedAt: c.completedAt, profileId: c.profileId, createdAt: c.createdAt });
+      } catch {
+        // already exists (PK conflict) — ignore
+      }
+      return;
+    }
+    case 'redemptions': {
+      const r = normalizeRedemptionRecord(rec.data);
+      try {
+        await db.insertRedemption({ id: r.id, rewardId: r.rewardId, rewardName: r.rewardName, cost: r.cost, redeemedAt: r.redeemedAt, profileId: r.profileId, createdAt: r.createdAt });
+      } catch {
+        // already exists
+      }
+      return;
+    }
+    case 'wallet': {
+      const pid = rec.data.profileId ?? rec.data.profile_id ?? rec.profileId;
+      if (pid) await db.setWalletBalance(rec.data.balance ?? 0, pid);
+      return;
+    }
+    case 'achievements': {
+      const pid = rec.data.profileId ?? rec.data.profile_id ?? rec.profileId;
+      try {
+        await db.insertAchievement({
+          id: rec.data.id,
+          trophyId: rec.data.trophyId ?? rec.data.trophy_id,
+          unlockedAt: rec.data.unlockedAt ?? rec.data.unlocked_at ?? new Date().toISOString(),
+          profileId: pid,
+          createdAt: rec.data.createdAt ?? rec.data.created_at ?? new Date().toISOString(),
+        });
+      } catch {
+        // already unlocked
+      }
+      return;
+    }
+    case 'user_stats': {
+      const pid = rec.data.profileId ?? rec.data.profile_id ?? rec.profileId;
+      if (!pid) return;
+      const current = await db.getUserStats(pid);
+      await db.updateUserStats({
+        totalCompletions: (rec.data.totalCompletions ?? rec.data.total_completions ?? 0) - current.totalCompletions,
+        longestStreak: (rec.data.longestStreak ?? rec.data.longest_streak ?? current.longestStreak),
+        longestSingleHabitStreak: (rec.data.longestSingleHabitStreak ?? rec.data.longest_single_habit_streak ?? current.longestSingleHabitStreak),
+        longestSingleHabitId: rec.data.longestSingleHabitId ?? rec.data.longest_single_habit_id ?? current.longestSingleHabitId,
+      }, pid);
+      return;
+    }
+    case 'purchased_skills': {
+      const pid = rec.data.profileId ?? rec.data.profile_id ?? rec.profileId;
+      const skillId = rec.data.skillId ?? rec.data.skill_id;
+      if (!pid || !skillId) return;
+      try {
+        await db.insertPurchasedSkill({
+          id: rec.data.id ?? Crypto.randomUUID(),
+          skillId,
+          profileId: pid,
+          purchasedAt: rec.data.purchasedAt ?? rec.data.purchased_at ?? new Date().toISOString(),
+          createdAt: rec.data.createdAt ?? rec.data.created_at ?? new Date().toISOString(),
+        });
+      } catch {
+        // already owned
+      }
+      return;
+    }
+  }
+}
+
+async function applyRemoteDeleteSqlite(rec: RemoteRecord): Promise<void> {
+  switch (rec.table) {
+    case 'profiles': await db.removeProfile(rec.id); return;
+    case 'habits': await db.removeHabit(rec.id); return;
+    case 'rewards': await db.removeReward(rec.id); return;
+    case 'completions': await db.removeCompletion(rec.id); return;
+    case 'redemptions':
+    case 'achievements':
+    case 'wallet':
+    case 'user_stats':
+    case 'purchased_skills':
+      // No db.remove* helper available; safe to skip — full pull will reconcile
+      return;
+  }
+}
+
+/**
+ * Apply an upsert from Supabase to local storage WITHOUT re-pushing it.
+ * Emits a mutation event tagged `fromRemote: true`.
+ */
+export async function applyRemoteUpsert(rec: RemoteRecord): Promise<void> {
+  await ensureDbReady();
+  suppressRemoteRebroadcast = true;
+  try {
+    if (useMemoryStore) {
+      await applyRemoteUpsertMemory(rec);
+      saveMemoryStore().catch(e => console.error(e));
+    } else {
+      await applyRemoteUpsertSqlite(rec);
+    }
+    emitMutation(rec.table, 'upsert', rec.id, rec.data, rec.profileId ?? null);
+  } finally {
+    suppressRemoteRebroadcast = false;
+  }
+}
+
+/**
+ * Apply a delete from Supabase to local storage WITHOUT re-pushing it.
+ */
+export async function applyRemoteDelete(rec: RemoteRecord): Promise<void> {
+  await ensureDbReady();
+  suppressRemoteRebroadcast = true;
+  try {
+    if (useMemoryStore) {
+      await applyRemoteDeleteMemory(rec);
+      saveMemoryStore().catch(e => console.error(e));
+    } else {
+      await applyRemoteDeleteSqlite(rec);
+    }
+    emitMutation(rec.table, 'delete', rec.id, { id: rec.id }, rec.profileId ?? null);
+  } finally {
+    suppressRemoteRebroadcast = false;
+  }
 }
 
 export async function logout(): Promise<void> {

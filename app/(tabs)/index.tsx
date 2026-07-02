@@ -580,8 +580,8 @@ export default function HabitsScreen() {
         {
           text: 'Restore',
           onPress: async () => {
-            const success = await restoreStreakWithCoins(STREAK_RESTORE_COST);
-            if (success) {
+            const result = await restoreStreakWithCoins(STREAK_RESTORE_COST);
+            if (result.success) {
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
               setStreakRestoreVisible(false);
               await loadData();

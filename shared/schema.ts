@@ -7,16 +7,22 @@ import {
   sqliteTable,
   text,
   uniqueIndex,
+  real,
 } from "drizzle-orm/sqlite-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+
+const timestampColumns = {
+  createdAt: text("createdAt").notNull(),
+  updatedAt: text("updated_at").notNull().default(sql`(CURRENT_TIMESTAMP)`),
+};
 
 // ==================== PROFILES ====================
 export const profiles = sqliteTable("profiles", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   type: text("type").notNull().$type<"child" | "parent">(),
-  createdAt: text("createdAt").notNull(),
+  ...timestampColumns,
 }, (table) => ({
   typeIdx: index("idx_profiles_type").on(table.type),
 }));
@@ -34,7 +40,7 @@ export const habits = sqliteTable("habits", {
   icon: text("icon").notNull(),
   coinReward: integer("coinReward").notNull(),
   color: text("color").notNull(),
-  createdAt: text("createdAt").notNull(),
+  ...timestampColumns,
   frequency: text("frequency").default("once").$type<"once" | "daily" | "weekly" | "monthly">(),
   scheduledTime: text("scheduledTime"),
   daysOfWeek: text("daysOfWeek"), // JSON array of numbers
@@ -65,7 +71,7 @@ export const rewards = sqliteTable("rewards", {
   icon: text("icon").notNull(),
   cost: integer("cost").notNull(),
   color: text("color").notNull(),
-  createdAt: text("createdAt").notNull(),
+  ...timestampColumns,
   profileId: text("profileId").notNull(),
   deletedAt: text("deletedAt"),
 }, (table) => ({
@@ -85,6 +91,7 @@ export const completions = sqliteTable("completions", {
   habitName: text("habitName").notNull(),
   coinReward: integer("coinReward").notNull(),
   completedAt: text("completedAt").notNull(),
+  ...timestampColumns,
   profileId: text("profileId").notNull(),
 }, (table) => ({
   profileIdIdx: index("idx_completions_profileId").on(table.profileId),
@@ -104,6 +111,7 @@ export const redemptions = sqliteTable("redemptions", {
   rewardName: text("rewardName").notNull(),
   cost: integer("cost").notNull(),
   redeemedAt: text("redeemedAt").notNull(),
+  ...timestampColumns,
   profileId: text("profileId").notNull(),
 }, (table) => ({
   profileIdIdx: index("idx_redemptions_profileId").on(table.profileId),
@@ -119,6 +127,7 @@ export type Redemption = typeof redemptions.$inferSelect;
 export const wallet = sqliteTable("wallet", {
   profileId: text("profileId").primaryKey(),
   balance: integer("balance").default(0).notNull(),
+  ...timestampColumns,
 });
 
 export const insertWalletSchema = createInsertSchema(wallet);
@@ -130,6 +139,7 @@ export const achievements = sqliteTable("achievements", {
   id: text("id").primaryKey(),
   trophyId: text("trophyId").notNull(),
   unlockedAt: text("unlockedAt").notNull(),
+  ...timestampColumns,
   profileId: text("profileId").notNull(),
 }, (table) => ({
   profileIdIdx: index("idx_achievements_profileId").on(table.profileId),
@@ -147,6 +157,7 @@ export const userStats = sqliteTable("user_stats", {
   longestStreak: integer("longestStreak").default(0).notNull(),
   longestSingleHabitStreak: integer("longestSingleHabitStreak").default(0).notNull(),
   longestSingleHabitId: text("longestSingleHabitId"),
+  ...timestampColumns,
 });
 
 export const insertUserStatsSchema = createInsertSchema(userStats);
@@ -159,6 +170,7 @@ export const purchasedSkills = sqliteTable("purchased_skills", {
   skillId: text("skillId").notNull(),
   profileId: text("profileId").notNull(),
   purchasedAt: text("purchasedAt").notNull(),
+  ...timestampColumns,
 }, (table) => ({
   skillIdIdx: index("idx_purchased_skills_skillId").on(table.skillId),
   profileIdIdx: index("idx_purchased_skills_profileId").on(table.profileId),
@@ -174,6 +186,7 @@ export const profileSettings = sqliteTable("profile_settings", {
   id: integer("id").primaryKey(),
   maxParents: integer("maxParents").default(2).notNull(),
   maxChildren: integer("maxChildren").default(1).notNull(),
+  ...timestampColumns,
 });
 
 export const insertProfileSettingsSchema = createInsertSchema(profileSettings);

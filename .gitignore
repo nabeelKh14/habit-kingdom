@@ -39,3 +39,13 @@ yarn-error.*
 .vercel
 
 .env
+
+# Build artifacts
+*.apk
+*.err.log
+*.out.log
+
+# Temp / generated
+.dreaming/
+graphify-out/
+test_edit.ts

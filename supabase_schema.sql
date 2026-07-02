@@ -19,7 +19,8 @@ CREATE TABLE profiles (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     type TEXT NOT NULL CHECK (type IN ('child', 'parent')),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
 
 -- 2. HABITS TABLE
@@ -30,6 +31,7 @@ CREATE TABLE habits (
     coin_reward INTEGER NOT NULL,
     color TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
     frequency TEXT DEFAULT 'once' CHECK (frequency IN ('once', 'daily', 'weekly', 'monthly')),
     scheduled_time TEXT,
     days_of_week TEXT, -- JSON-stringified array
@@ -50,6 +52,7 @@ CREATE TABLE rewards (
     cost INTEGER NOT NULL,
     color TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
     profile_id TEXT REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
     deleted_at TIMESTAMP WITH TIME ZONE
 );
@@ -61,6 +64,7 @@ CREATE TABLE completions (
     habit_name TEXT NOT NULL,
     coin_reward INTEGER NOT NULL,
     completed_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
     profile_id TEXT REFERENCES profiles(id) ON DELETE CASCADE NOT NULL
 );
 
@@ -71,13 +75,15 @@ CREATE TABLE redemptions (
     reward_name TEXT NOT NULL,
     cost INTEGER NOT NULL,
     redeemed_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
     profile_id TEXT REFERENCES profiles(id) ON DELETE CASCADE NOT NULL
 );
 
 -- 6. WALLET TABLE
 CREATE TABLE wallet (
     profile_id TEXT PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
-    balance INTEGER DEFAULT 0 NOT NULL
+    balance INTEGER DEFAULT 0 NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
 
 -- 7. ACHIEVEMENTS TABLE
@@ -85,6 +91,7 @@ CREATE TABLE achievements (
     id TEXT PRIMARY KEY,
     trophy_id TEXT NOT NULL,
     unlocked_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
     profile_id TEXT REFERENCES profiles(id) ON DELETE CASCADE NOT NULL
 );
 
@@ -94,7 +101,8 @@ CREATE TABLE user_stats (
     total_completions INTEGER DEFAULT 0 NOT NULL,
     longest_streak INTEGER DEFAULT 0 NOT NULL,
     longest_single_habit_streak INTEGER DEFAULT 0 NOT NULL,
-    longest_single_habit_id TEXT
+    longest_single_habit_id TEXT,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
 
 -- Create indexes for performance optimization
@@ -110,6 +118,24 @@ CREATE INDEX idx_redemptions_profile_id ON redemptions(profile_id);
 CREATE INDEX idx_redemptions_reward_id ON redemptions(reward_id);
 CREATE INDEX idx_achievements_profile_id ON achievements(profile_id);
 CREATE INDEX idx_achievements_trophy_id ON achievements(trophy_id);
+
+-- Auto-update updated_at triggers
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = TIMEZONE('utc'::text, NOW());
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER update_profiles_updated_at BEFORE UPDATE ON profiles FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_habits_updated_at BEFORE UPDATE ON habits FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_rewards_updated_at BEFORE UPDATE ON rewards FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_completions_updated_at BEFORE UPDATE ON completions FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_redemptions_updated_at BEFORE UPDATE ON redemptions FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_wallet_updated_at BEFORE UPDATE ON wallet FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_achievements_updated_at BEFORE UPDATE ON achievements FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_user_stats_updated_at BEFORE UPDATE ON user_stats FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Enable Row-Level Security (optional, for simple integration we keep it open or manage it via Anon)
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
