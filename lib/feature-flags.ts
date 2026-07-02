@@ -1,84 +1,190 @@
-// Feature flags for selective rollout of risky or experimental features
-// Use these sparingly - only for features that may need quick disabling
+/**
+ * Feature Flags — remote-configurable toggle system.
+ * 
+ * Usage:
+ *   import { isFeatureEnabled, FeatureFlag, setFeatureFlag } from '../lib/feature-flags';
+ *   if (isFeatureEnabled(FeatureFlag.SOCIAL_FEATURES)) { ... }
+ * 
+ * Backward-compatible with old API:
+ *   import { FEATURE_FLAGS, isEnabled } from './feature-flags';
+ *   if (isEnabled('PARENT_ACCESS_CONTROL')) { ... }
+ */
 
-export const FEATURE_FLAGS = {
-  // ===== GAMIFICATION =====
-  
-  // Load skill tree from database instead of hardcoded values
-  // When false: Uses hardcoded SKILL_TREE in kingdom.tsx
-  // When true: Loads skills from database
-  SKILL_TREE_V2: false,
+export enum FeatureFlag {
+  // Core features
+  SOCIAL_FEATURES = "social_features",
+  CLOUD_SYNC = "cloud_sync",
+  PARENT_CONTROLS = "parent_controls",
+  DARK_MODE = "dark_mode",
 
-  // Show trophy unlock notifications/alerts
-  // When false: Trophies unlock silently
-  // When true: Shows celebration modal when new trophy unlocked
-  TROPHY_NOTIFICATIONS: true,
+  // Kids safety
+  STRICT_MODERATION = "strict_moderation",
+  CHILD_DATA_DELETION = "child_data_deletion",
+  PARENT_ACCESS_CONTROL = "parent_access_control",
 
-  // Use dynamic streak restore cost formula
-  // When false: Static 500 coin cost
-  // When true: Cost = min(streak * 50, 1500)
-  STREAK_RESTORE_V2: true,
+  // Performance
+  LAZY_LOADING = "lazy_loading",
+  IMAGE_OPTIMIZATION = "image_optimization",
+  PAGINATION = "pagination",
 
-  // ===== SECURITY & ACCESS CONTROL =====
-  
-  // Block child profiles from using admin actions (bonus/penalty/reset)
-  // When false: All profiles can use admin actions
-  // When true: Only parent profiles can use admin actions
-  PARENT_ACCESS_CONTROL: true,
+  // Notifications
+  PUSH_NOTIFICATIONS = "push_notifications",
+  HABIT_REMINDERS = "habit_reminders",
+  STREAK_ALERTS = "streak_alerts",
 
-  // Verify profile ownership on delete/update operations
-  // When false: No ownership verification
-  // When true: Operations verify resource belongs to current profile
-  PROFILE_ISOLATION_CHECKS: true,
-
-  // ===== PERFORMANCE (EXPERIMENTAL) =====
-  
-  // Use paginated activity feed
-  // When false: Loads all activity at once
-  // When true: Loads 50 items at a time with infinite scroll
-  PAGINATED_ACTIVITY: false,
-
-  // ===== NOTIFICATIONS =====
-  
-  // Use weekly/monthly notification scheduling (may have platform limitations)
-  // When false: Weekly/monthly habits get daily notifications
-  // When true: Respects actual frequency for notifications
-  WEEKLY_MONTHLY_NOTIFICATIONS: false,
-
-  // ===== DATABASE =====
-  
-  // Use archived (soft delete) instead of hard delete
-  // When false: DELETE removes records permanently
-  // When true: UPDATE sets deletedAt timestamp instead
-  SOFT_DELETE_ARCHIVE: true,
-} as const;
-
-export type FeatureFlag = keyof typeof FEATURE_FLAGS;
-
-export function isEnabled(flag: FeatureFlag): boolean {
-  return FEATURE_FLAGS[flag] === true;
+  // Analytics
+  ANONYMOUS_ANALYTICS = "anonymous_analytics",
+  CRASH_REPORTING = "crash_reporting",
 }
 
-export function getFlagValue<K extends FeatureFlag>(
-  flag: K
-): (typeof FEATURE_FLAGS)[K] {
-  return FEATURE_FLAGS[flag];
-}
+/**
+ * Default flag values — always safe defaults for children.
+ * Override via remote config in production.
+ */
+const DEFAULT_FLAGS: Record<FeatureFlag, boolean> = {
+  [FeatureFlag.SOCIAL_FEATURES]: false, // Children: no social by default
+  [FeatureFlag.CLOUD_SYNC]: true,
+  [FeatureFlag.PARENT_CONTROLS]: true,
+  [FeatureFlag.DARK_MODE]: true,
 
-// Helper to conditionally apply feature behavior
-export function withFeatureFlag<T>(
-  flag: FeatureFlag,
-  whenEnabled: T,
-  whenDisabled: T
-): T {
-  return isEnabled(flag) ? whenEnabled : whenDisabled;
-}
+  [FeatureFlag.STRICT_MODERATION]: true, // Always on for children
+  [FeatureFlag.CHILD_DATA_DELETION]: true,
+  [FeatureFlag.PARENT_ACCESS_CONTROL]: true,
 
-// Development helper to override flags (use in development only)
-export function setFeatureFlag(flag: FeatureFlag, value: boolean): void {
-  if (process.env.NODE_ENV !== "development") {
-    console.warn("[FeatureFlags] setFeatureFlag called outside development");
-    return;
+  [FeatureFlag.LAZY_LOADING]: true,
+  [FeatureFlag.IMAGE_OPTIMIZATION]: true,
+  [FeatureFlag.PAGINATION]: true,
+
+  [FeatureFlag.PUSH_NOTIFICATIONS]: true,
+  [FeatureFlag.HABIT_REMINDERS]: true,
+  [FeatureFlag.STREAK_ALERTS]: true,
+
+  [FeatureFlag.ANONYMOUS_ANALYTICS]: false, // Off by default for children
+  [FeatureFlag.CRASH_REPORTING]: true,
+};
+
+// In-memory override store
+const overrides = new Map<FeatureFlag, boolean>();
+
+/**
+ * Check if a feature is enabled.
+ * Falls back: override → default → false.
+ */
+export function isFeatureEnabled(flag: FeatureFlag): boolean {
+  if (overrides.has(flag)) {
+    return overrides.get(flag)!;
   }
-  (FEATURE_FLAGS as any)[flag] = value;
+  return DEFAULT_FLAGS[flag] ?? false;
+}
+
+/**
+ * Override a feature flag for the current session.
+ * Pass `null` to clear the override (revert to default).
+ */
+export function setFeatureFlag(flag: FeatureFlag, value: boolean | null): void {
+  if (value === null) {
+    overrides.delete(flag);
+  } else {
+    overrides.set(flag, value);
+  }
+}
+
+/**
+ * Override multiple flags at once (e.g., from remote config).
+ */
+export function setFeatureFlags(flags: Partial<Record<FeatureFlag, boolean | null>>): void {
+  for (const [key, value] of Object.entries(flags)) {
+    const flag = key as FeatureFlag;
+    if (value === null || value === undefined) {
+      overrides.delete(flag);
+    } else {
+      overrides.set(flag, value);
+    }
+  }
+}
+
+/**
+ * Reset all overrides (revert to defaults).
+ */
+export function resetFeatureFlags(): void {
+  overrides.clear();
+}
+
+/**
+ * Get all current flag states.
+ */
+export function getAllFeatureFlags(): Record<FeatureFlag, boolean> {
+  const result = {} as Record<FeatureFlag, boolean>;
+  for (const flag of Object.values(FeatureFlag)) {
+    result[flag] = isFeatureEnabled(flag);
+  }
+  return result;
+}
+
+/**
+ * Load flags from a remote config source (e.g., Supabase, Firebase Remote Config).
+ * Returns the number of flags updated.
+ */
+export async function loadRemoteFeatureFlags(serviceUrl?: string): Promise<number> {
+  try {
+    const url = serviceUrl || `${process.env.EXPO_PUBLIC_SUPABASE_URL || ""}/functions/v1/feature-flags`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    if (!response.ok) {
+      console.warn("[FeatureFlags] Remote config fetch failed:", response.status);
+      return 0;
+    }
+
+    const data = (await response.json()) as Partial<Record<FeatureFlag, boolean>>;
+    setFeatureFlags(data);
+    return Object.keys(data).length;
+  } catch (err) {
+    console.warn("[FeatureFlags] Remote config error (using defaults):", err);
+    return 0;
+  }
+}
+
+/**
+ * For testing: clear everything and set to defaults.
+ */
+export function resetToDefaults(): void {
+  overrides.clear();
+}
+
+// ── Backward-compatible exports (old API) ──
+
+/**
+ * @deprecated Use `FeatureFlag` enum + `isFeatureEnabled()` instead.
+ */
+export const FEATURE_FLAGS: Record<string, boolean> = {
+  PARENT_ACCESS_CONTROL: true,
+  PROFILE_ISOLATION_CHECKS: true,
+  SOFT_DELETE_ARCHIVE: true,
+  PAGINATED_ACTIVITY: false,
+  TROPHY_NOTIFICATIONS: true,
+  SKILL_TREE_V2: false,
+};
+
+/**
+ * @deprecated Use `isFeatureEnabled(FeatureFlag.XXX)` instead.
+ */
+export function isEnabled(flag: string): boolean {
+  return FEATURE_FLAGS[flag] ?? false;
+}
+
+/**
+ * @deprecated Use direct FeatureFlag enum comparison instead.
+ */
+export function getFlagValue(flag: string): boolean {
+  return FEATURE_FLAGS[flag] ?? false;
+}
+
+/**
+ * @deprecated Use ternary with isFeatureEnabled() instead.
+ */
+export function withFeatureFlag<T>(flag: string, whenEnabled: T, whenDisabled: T): T {
+  return isEnabled(flag) ? whenEnabled : whenDisabled;
 }

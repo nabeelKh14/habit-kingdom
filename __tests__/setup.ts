@@ -1,3 +1,6 @@
+// Set globals needed by Expo/node_modules before anything imports
+(globalThis as any).__DEV__ = true;
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock environment

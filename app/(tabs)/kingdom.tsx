@@ -8,6 +8,7 @@ import {
   Pressable,
   ScrollView,
   Alert,
+  ActivityIndicator,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -224,6 +225,16 @@ export default function KingdomScreen() {
   const tierLabels = ['', 'Starter Gear', '3-Day Streak', '7-Day Streak', '14-Day Streak', '30-Day Legend'];
 
   const purchasedCount = skills.filter(s => s.purchased).length;
+
+  // Show loading spinner on initial data load
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.loadingContainer, { paddingTop: insets.top + webTopPadding }]}>
+        <ActivityIndicator size="large" color={Colors.primary} />
+        <Text style={styles.loadingText}>Loading your kingdom...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, { paddingTop: insets.top + webTopPadding }]}>
@@ -676,5 +687,15 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: "Nunito_600SemiBold",
     color: Colors.textLight,
+  },
+  loadingContainer: {
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 12,
+  },
+  loadingText: {
+    fontSize: 16,
+    fontFamily: "Nunito_500Medium",
+    color: Colors.textSecondary,
   },
 });

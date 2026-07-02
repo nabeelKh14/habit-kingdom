@@ -2,10 +2,11 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack, useRouter } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect, useState } from "react";
-import { View, ActivityIndicator, StyleSheet } from "react-native";
+import { View, ActivityIndicator, StyleSheet, Platform } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { ErrorBoundary } from "../components/ErrorBoundary";
+import { OfflineBanner } from "../components/OfflineBanner";
 import { queryClient } from "../lib/query-client";
 import {
   useFonts,
@@ -15,10 +16,6 @@ import {
   Nunito_700Bold,
   Nunito_800ExtraBold,
 } from "@expo-google-fonts/nunito";
-// Note: expo-notifications doesn't work in Expo Go SDK 53+
-// We wrap it in a try/catch or conditional import if needed, 
-// but for now we just comment it out to prevent the instant crash on boot.
-// import * as Notifications from "expo-notifications";
 import { isOnboardingComplete, setOnboardingComplete, getActiveProfileId } from "../lib/onboarding-storage";
 import { setActiveProfileId, getProfiles } from "../lib/storage";
 import { supabase } from "../lib/supabase";
@@ -27,45 +24,135 @@ import Colors from "../constants/colors";
 
 SplashScreen.preventAutoHideAsync();
 
-// Handle notification responses
+// =========================================================================
+// NOTIFICATION HANDLER — dynamically loaded to avoid Expo Go crash
+// =========================================================================
 function NotificationHandler() {
   const router = useRouter();
 
   useEffect(() => {
-    // Disabled for Expo Go compatibility
-    /*
-    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-      const habitId = response.notification.request.content.data?.habitId;
-      if (habitId) {
-        // Navigate to habits tab when notification is tapped
-        router.push("/(tabs)");
-      }
-    });
+    let cleanup: (() => void) | undefined;
 
-    return () => subscription.remove();
-    */
+    (async () => {
+      try {
+        // Dynamic import — expo-notifications crashes in Expo Go, works in dev/preview builds
+        const Notifications = await import("expo-notifications");
+
+        // 1. Tap handler: navigate to habits tab when notification is tapped
+        const sub = Notifications.default.addNotificationResponseReceivedListener((response) => {
+          console.log("[Notifications] Tapped notification:", response.notification.request.identifier);
+          const data = response.notification.request.content.data;
+          if (data?.habitId) {
+            // Navigate to main tabs — user can see their habits
+            router.push("/(tabs)");
+          } else if (data?.type === "habit_reminder" || data?.type === "midday_reminder" || data?.type === "night_reminder") {
+            router.push("/(tabs)");
+          }
+        });
+
+        cleanup = () => sub.remove();
+      } catch (e) {
+        console.warn("[Notifications] Tap handler skipped (Expo Go):", e);
+      }
+    })();
+
+    return () => cleanup?.();
   }, [router]);
 
   return null;
 }
 
-function RootLayoutNav() {
-  // Request notification permissions on app start (only if not already granted)
+// =========================================================================
+// PUSH TOKEN REGISTRATION — runs after onboarding is done
+// =========================================================================
+function PushTokenRegistration() {
   useEffect(() => {
-    const checkAndRequestPermissions = async () => {
+    (async () => {
+      try {
+        const Notifications = await import("expo-notifications");
+
+        // 2. Get Expo push token
+        const { status: permStatus } = await Notifications.default.getPermissionsAsync();
+        if (permStatus !== "granted") {
+          console.log("[Notifications] Permissions not granted, skipping token registration");
+          return;
+        }
+
+        const projectId = process.env.EXPO_PUBLIC_PROJECT_ID;
+        if (!projectId) {
+          console.log("[Notifications] No EXPO_PUBLIC_PROJECT_ID set, using generic token");
+        }
+
+        const expoPushToken = await Notifications.default.getExpoPushTokenAsync({
+          projectId: projectId ?? undefined,
+        });
+        const tokenStr = expoPushToken.data;
+
+        if (!tokenStr) {
+          console.log("[Notifications] No push token returned");
+          return;
+        }
+
+        console.log("[Notifications] Got Expo push token:", tokenStr.slice(0, 20) + "...");
+
+        // 3. Register token with our server
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token) {
+          console.warn("[Notifications] No session, cannot register token");
+          return;
+        }
+
+        const apiUrl = process.env.EXPO_PUBLIC_API_URL;
+        if (!apiUrl) {
+          console.log("[Notifications] No API URL — token registration skipped (offline/standalone mode)");
+          return;
+        }
+
+        const platform = Platform.OS === "ios" ? "ios" : "android";
+        const response = await fetch(`${apiUrl}/api/v1/notifications/register`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ token: tokenStr, platform }),
+        });
+
+        const result = await response.json();
+        if (result.success) {
+          console.log(`[Notifications] Token registered successfully (${result.tokenCount} tokens)`);
+        } else {
+          console.warn("[Notifications] Token registration failed:", result);
+        }
+      } catch (e) {
+        console.warn("[Notifications] Token registration skipped (Expo Go or network error):", e);
+      }
+    })();
+  }, []);
+
+  return null;
+}
+
+// =========================================================================
+// ROOT LAYOUT NAV
+// =========================================================================
+function RootLayoutNav() {
+  // Request notification permissions + init handler on app start
+  useEffect(() => {
+    (async () => {
       try {
         const { initNotifications } = await import("../lib/notifications");
         initNotifications();
       } catch (e) {
-        console.warn("Notifications init skipped (expected in Expo Go):", e);
+        console.warn("[Notifications] Init skipped (Expo Go):", e);
       }
-    };
-    checkAndRequestPermissions();
+    })();
   }, []);
 
   return (
     <>
       <NotificationHandler />
+      <PushTokenRegistration />
       <Stack screenOptions={{ headerBackTitle: "Back" }}>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen
@@ -94,6 +181,9 @@ function RootLayoutNav() {
   );
 }
 
+// =========================================================================
+// ROOT LAYOUT EXPORT
+// =========================================================================
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     Nunito_400Regular,
@@ -112,19 +202,19 @@ export default function RootLayout() {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         const complete = await isOnboardingComplete();
-        
+
         // If there's no active session, we require login/onboarding
         setShowOnboarding(!session || !complete);
-        
+
         if (session && complete) {
           // Initialize profiles (create default if none exist)
           const { initializeProfiles } = await import("../lib/storage");
           await initializeProfiles();
-          
+
           // Initialize active profile from storage
           const activeId = await getActiveProfileId();
           setActiveProfileId(activeId);
-          
+
           // Sync profiles from database to onboarding storage
           const profiles = await getProfiles();
           if (profiles.length > 0) {
@@ -136,12 +226,12 @@ export default function RootLayout() {
           const { syncWithSupabase } = await import("../lib/sync");
           syncWithSupabase().then(res => {
             if (res.success) {
-              console.log('[SUPABASE] Background sync completed:', res.message);
+              console.log("[SUPABASE] Background sync completed:", res.message);
             } else {
-              console.log('[SUPABASE] Background sync skipped:', res.message);
+              console.log("[SUPABASE] Background sync skipped:", res.message);
             }
           }).catch(err => {
-            console.error('[SUPABASE] Background sync error:', err);
+            console.error("[SUPABASE] Background sync error:", err);
           });
         }
       } catch (error) {
@@ -155,17 +245,16 @@ export default function RootLayout() {
     checkSessionAndOnboarding();
   }, []);
 
-  // Debug: Log font loading status
   useEffect(() => {
-    console.log('[DEBUG] Fonts loaded:', fontsLoaded, 'Error:', fontError);
+    console.log("[DEBUG] Fonts loaded:", fontsLoaded, "Error:", fontError);
   }, [fontsLoaded, fontError]);
 
   useEffect(() => {
     if (fontsLoaded) {
-      console.log('[DEBUG] Hiding splash screen - fonts loaded');
+      console.log("[DEBUG] Hiding splash screen - fonts loaded");
       SplashScreen.hideAsync();
     } else if (fontError) {
-      console.log('[DEBUG] Font error - hiding splash anyway:', fontError);
+      console.log("[DEBUG] Font error - hiding splash anyway:", fontError);
       // Hide splash even if fonts fail - prevent stuck screen
       SplashScreen.hideAsync();
     }
@@ -177,7 +266,7 @@ export default function RootLayout() {
   };
 
   // Wait for fonts and onboarding check to complete
-  if (!fontsLoaded && !fontError || isLoading) {
+  if ((!fontsLoaded && !fontError) || isLoading) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={Colors.primary} />
@@ -191,13 +280,14 @@ export default function RootLayout() {
   }
 
   // Even if fonts failed, we proceed - don't get stuck on splash
-  console.log('[DEBUG] Proceeding to render app, fontsLoaded:', fontsLoaded);
+  console.log("[DEBUG] Proceeding to render app, fontsLoaded:", fontsLoaded);
 
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <GestureHandlerRootView>
           <KeyboardProvider>
+            <OfflineBanner />
             <RootLayoutNav />
           </KeyboardProvider>
         </GestureHandlerRootView>

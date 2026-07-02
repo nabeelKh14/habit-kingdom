@@ -31,6 +31,7 @@ vi.mock('react-native', () => ({
   KeyboardAvoidingView: 'KeyboardAvoidingView',
   Linking: { openURL: vi.fn(), canOpenURL: vi.fn().mockResolvedValue(true) },
   RefreshControl: 'RefreshControl',
+  AppState: { addEventListener: vi.fn(), removeEventListener: vi.fn(), currentState: 'active' },
   useWindowDimensions: () => ({ width: 390, height: 844 }),
 }));
 

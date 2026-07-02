@@ -1,28 +1,18 @@
 import { randomUUID } from "crypto";
 import * as bcrypt from "bcrypt";
+import type { ServerUser, UserSession } from "../shared/types";
 
 // Configuration
 const SALT_ROUNDS = 12;
 const TOKEN_EXPIRY = 7 * 24 * 60 * 60 * 1000; // 7 days in ms
 
-// Types
-export interface User {
-  id: string;
-  username: string;
-  passwordHash: string;
-  createdAt: string;
-}
+// Local type aliases for backward compatibility with routes
+export type User = ServerUser;
+export type { UserSession };
 
 export interface InsertUser {
   username: string;
   password: string;
-}
-
-export interface UserSession {
-  token: string;
-  userId: string;
-  username: string;
-  expiresAt: number;
 }
 
 export interface IStorage {
@@ -34,6 +24,12 @@ export interface IStorage {
   validateSession(token: string): Promise<UserSession | null>;
   invalidateSession(token: string): Promise<void>;
   invalidateAllSessions(userId: string): Promise<void>;
+
+  // COPPA compliance: permanently delete all user data
+  deleteUserData(userId: string): Promise<void>;
+
+  // Verify parent-child relationship
+  isChildLinkedToParent(childId: string, parentId: string): Promise<boolean>;
 }
 
 export class SecureStorage implements IStorage {
@@ -138,6 +134,26 @@ export class SecureStorage implements IStorage {
         this.sessions.delete(token);
       }
     }
+  }
+
+  // COPPA compliance: permanently delete all user data
+  async deleteUserData(userId: string): Promise<void> {
+    this.users.delete(userId);
+    for (const [token, session] of this.sessions.entries()) {
+      if (session.userId === userId) {
+        this.sessions.delete(token);
+      }
+    }
+    console.log(`[Data Deletion] Permanently deleted all data for user ${userId}`);
+  }
+
+  // Verify parent-child relationship (in-memory stub)
+  async isChildLinkedToParent(childId: string, parentId: string): Promise<boolean> {
+    // In production, query DB for child-parent link
+    // For now, allow if both users exist
+    const child = this.users.get(childId);
+    const parent = this.users.get(parentId);
+    return !!child && !!parent;
   }
 }
 

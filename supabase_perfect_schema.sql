@@ -107,8 +107,36 @@ CREATE TABLE user_stats (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
 
+-- 9. PUSH TOKENS TABLE (Expo Push Notification tokens)
+CREATE TABLE push_tokens (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    profile_id UUID REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
+    token TEXT NOT NULL,
+    platform TEXT NOT NULL CHECK (platform IN ('ios', 'android')),
+    is_valid BOOLEAN DEFAULT TRUE NOT NULL,
+    registered_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    last_error TEXT,
+    -- One token per platform per profile
+    UNIQUE(profile_id, token)
+);
+
+-- 10. NOTIFICATION SETTINGS TABLE (per-profile reminder preferences)
+CREATE TABLE notification_settings (
+    profile_id UUID PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+    midday_enabled BOOLEAN DEFAULT FALSE NOT NULL,
+    midday_time TEXT DEFAULT '12:00' NOT NULL,
+    night_enabled BOOLEAN DEFAULT FALSE NOT NULL,
+    night_time TEXT DEFAULT '21:00' NOT NULL,
+    timezone TEXT DEFAULT 'UTC' NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+
 -- Create performance optimization indexes
 CREATE INDEX idx_profiles_type ON profiles(type);
+CREATE INDEX idx_push_tokens_profile_id ON push_tokens(profile_id);
+CREATE INDEX idx_push_tokens_token ON push_tokens(token);
+CREATE INDEX idx_push_tokens_platform ON push_tokens(platform);
 CREATE INDEX idx_habits_profile_id ON habits(profile_id);
 CREATE INDEX idx_habits_deleted_at ON habits(deleted_at);
 CREATE INDEX idx_rewards_profile_id ON rewards(profile_id);
@@ -138,6 +166,8 @@ CREATE TRIGGER update_redemptions_updated_at BEFORE UPDATE ON redemptions FOR EA
 CREATE TRIGGER update_wallet_updated_at BEFORE UPDATE ON wallet FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_achievements_updated_at BEFORE UPDATE ON achievements FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_user_stats_updated_at BEFORE UPDATE ON user_stats FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_push_tokens_updated_at BEFORE UPDATE ON push_tokens FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_notification_settings_updated_at BEFORE UPDATE ON notification_settings FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Enable Row-Level Security (RLS) globally on all tables
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
@@ -148,6 +178,8 @@ ALTER TABLE redemptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE wallet ENABLE ROW LEVEL SECURITY;
 ALTER TABLE achievements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_stats ENABLE ROW LEVEL SECURITY;
+ALTER TABLE push_tokens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notification_settings ENABLE ROW LEVEL SECURITY;
 
 -- Create ultra-secure RLS policies bound strictly to authenticated user ID (auth.uid())
 CREATE POLICY "Users can only read/write their own profile" 
@@ -173,6 +205,12 @@ CREATE POLICY "Users can only read/write their own achievements"
 
 CREATE POLICY "Users can only read/write their own stats" 
     ON user_stats FOR ALL USING (auth.uid() = profile_id) WITH CHECK (auth.uid() = profile_id);
+
+CREATE POLICY "Users can only read/write their own push tokens" 
+    ON push_tokens FOR ALL USING (auth.uid() = profile_id) WITH CHECK (auth.uid() = profile_id);
+
+CREATE POLICY "Users can only read/write their own notification settings" 
+    ON notification_settings FOR ALL USING (auth.uid() = profile_id) WITH CHECK (auth.uid() = profile_id);
 
 
 -- ==================== AUTOMATED USER PROVISIONING TRIGGER ====================

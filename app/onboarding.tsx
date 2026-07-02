@@ -30,8 +30,36 @@ import Colors from "../constants/colors";
 import { createProfile, setActiveProfileId } from "../lib/storage";
 import { setOnboardingComplete, setActiveProfileId as saveActiveProfile, saveProfiles, getSavedProfiles } from "../lib/onboarding-storage";
 import { supabase } from "../lib/supabase";
+import * as WebBrowser from "expo-web-browser";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
+
+// Apple/Google OAuth helper
+async function signInWithProvider(provider: "apple" | "google") {
+  try {
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: {
+        redirectTo: "habittracker://auth/callback",
+        skipBrowserRedirect: false,
+      },
+    });
+    if (error) throw error;
+    if (data?.url) {
+      const result = await WebBrowser.openAuthSessionAsync(data.url, "habittracker://auth/callback");
+      if (result.type === "success") {
+        const { url } = result;
+        // Supabase handles the token exchange via the redirect URL
+        // Session will be set automatically by supabase.auth
+        return true;
+      }
+    }
+    return false;
+  } catch (err) {
+    console.error(`[AUTH] ${provider} sign-in error:`, err);
+    return false;
+  }
+}
 
 // Onboarding step data
 interface OnboardingStep {
@@ -242,6 +270,58 @@ function EmailAuthView({ onLoginSuccess }: { onLoginSuccess: () => void }) {
           >
             <Text style={styles.authButtonText}>{loading ? "Sending..." : "Send Verification Code"}</Text>
           </Pressable>
+
+          {/* OAuth Divider */}
+          <View style={styles.oauthDivider}>
+            <View style={styles.oauthLine} />
+            <Text style={styles.oauthDividerText}>or continue with</Text>
+            <View style={styles.oauthLine} />
+          </View>
+
+          {/* Apple / Google Sign-In */}
+          <View style={styles.oauthButtons}>
+            <Pressable
+              style={[styles.oauthButton, styles.googleButton]}
+              onPress={async () => {
+                setLoading(true);
+                setError(null);
+                const ok = await signInWithProvider("google");
+                if (ok) {
+                  setSuccess(true);
+                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                  onLoginSuccess();
+                } else {
+                  setError("Google sign-in was cancelled or failed.");
+                }
+                setLoading(false);
+              }}
+              disabled={loading}
+            >
+              <Ionicons name="logo-google" size={20} color="#fff" />
+              <Text style={styles.oauthButtonText}>Google</Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.oauthButton, styles.appleButton]}
+              onPress={async () => {
+                setLoading(true);
+                setError(null);
+                const ok = await signInWithProvider("apple");
+                if (ok) {
+                  setSuccess(true);
+                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                  onLoginSuccess();
+                } else {
+                  setError("Apple sign-in was cancelled or failed.");
+                }
+                setLoading(false);
+              }}
+              disabled={loading}
+            >
+              <Ionicons name="logo-apple" size={20} color="#fff" />
+              <Text style={styles.oauthButtonText}>Apple</Text>
+            </Pressable>
+          </View>
         </View>
       ) : (
         <View style={styles.inputSection}>
@@ -703,5 +783,48 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontFamily: "Nunito_700Bold",
     marginTop: 10,
+  },
+  // OAuth buttons
+  oauthDivider: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 20,
+    marginBottom: 16,
+  },
+  oauthLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: Colors.border,
+  },
+  oauthDividerText: {
+    marginHorizontal: 12,
+    fontSize: 13,
+    fontFamily: "Nunito_500Medium",
+    color: Colors.textSecondary,
+  },
+  oauthButtons: {
+    flexDirection: "row",
+    gap: 12,
+    width: "100%",
+  },
+  oauthButton: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: 16,
+  },
+  googleButton: {
+    backgroundColor: "#4285F4",
+  },
+  appleButton: {
+    backgroundColor: "#000000",
+  },
+  oauthButtonText: {
+    color: "#fff",
+    fontSize: 15,
+    fontFamily: "Nunito_700Bold",
   },
 });

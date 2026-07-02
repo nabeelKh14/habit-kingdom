@@ -2670,6 +2670,27 @@ export async function logout(): Promise<void> {
   // Clear profile cache
   clearProfileState();
   
+  // Unregister push token before sign-out (so server stops sending)
+  try {
+    const Notifications = await import("expo-notifications");
+    const { supabase: supabaseLocal } = await import('./supabase');
+    const { data: { session } } = await supabaseLocal.auth.getSession();
+    if (session?.access_token) {
+      const apiUrl = process.env.EXPO_PUBLIC_API_URL;
+      if (apiUrl) {
+        const token = (await Notifications.default.getExpoPushTokenAsync()).data;
+        if (token) {
+          await fetch(`${apiUrl}/api/v1/notifications/unregister?token=${encodeURIComponent(token)}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[Notifications] Token unregister skipped:", e);
+  }
+
   // Sign out of Supabase
   const { supabase } = await import('./supabase');
   await supabase.auth.signOut();

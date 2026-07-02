@@ -10,6 +10,7 @@ import {
   Alert,
   Modal,
   ScrollView,
+  ActivityIndicator,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather, Ionicons } from "@expo/vector-icons";
@@ -414,6 +415,16 @@ export default function RewardsScreen() {
     transform: [{ scale: celebrationScale.value }],
     opacity: celebrationScale.value > 0 ? 1 : 0,
   }));
+
+  // Show loading spinner on initial data load
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.loadingContainer, { paddingTop: insets.top + webTopPadding }]}>
+        <ActivityIndicator size="large" color={Colors.primary} />
+        <Text style={styles.loadingText}>Loading rewards...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, { paddingTop: insets.top + webTopPadding }]}>
@@ -1118,5 +1129,15 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontFamily: "Nunito_700Bold",
     color: Colors.text,
+  },
+  loadingContainer: {
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 12,
+  },
+  loadingText: {
+    fontSize: 16,
+    fontFamily: "Nunito_500Medium",
+    color: Colors.textSecondary,
   },
 });

@@ -1,340 +1,375 @@
-import type { Express, Request, Response } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "node:http";
+import crypto from "node:crypto";
 import { storage, type User } from "./storage";
-import { signToken, authenticate, requireParent, authLimiter, sanitizeInput } from "./middleware";
+import { signToken, authenticate, requireParent, authLimiter, adminLimiter, sanitizeInput } from "./middleware";
+import { registerNotificationRoutes } from "./notifications";
+import { getFeatureFlags, setFlagOverrides } from "./remote-config";
+import {
+  isFeatureEnabled,
+  setFeatureFlag,
+  loadRemoteFeatureFlags,
+  FeatureFlag,
+} from "../lib/feature-flags";
+
+const API_PREFIX = "/api/v1";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
 
-  // Apply global middleware
+  // Global middleware
   app.use(sanitizeInput);
 
+  // Cache-Control headers for all API responses
+  app.use("/api", (_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
+    next();
+  });
+
+  // ── Helper ──
+  function wrap(fn: (req: Request, res: Response) => Promise<void>) {
+    return (req: Request, res: Response, next: NextFunction) => {
+      fn(req, res).catch(next);
+    };
+  }
+
   // ===== AUTH ROUTES =====
-  
-  app.post("/api/auth/register", authLimiter, async (req: Request, res: Response) => {
-    try {
-      const { username, password } = req.body;
 
-      if (!username || typeof username !== "string") {
-        res.status(400).json({ error: "INVALID_INPUT", message: "Username is required" });
-        return;
-      }
+  app.post(`${API_PREFIX}/auth/register`, authLimiter, wrap(async (req: Request, res: Response) => {
+    const { username, password } = req.body;
 
-      if (!password || typeof password !== "string") {
-        res.status(400).json({ error: "INVALID_INPUT", message: "Password is required" });
-        return;
-      }
-
-      const user = await storage.createUser({ username, password });
-      const session = await storage.createSession(user.id, user.username);
-      const token = signToken({ userId: user.id, username: user.username });
-
-      res.status(201).json({
-        user: { id: user.id, username: user.username, createdAt: user.createdAt },
-        token,
-        expiresAt: new Date(session.expiresAt).toISOString(),
-      });
-    } catch (error: any) {
-      console.error("[Auth] Registration error:", error);
-      res.status(400).json({ error: "REGISTRATION_FAILED", message: error.message });
+    if (!username || typeof username !== "string") {
+      res.status(400).json({ error: "INVALID_INPUT", message: "Username is required" });
+      return;
     }
-  });
 
-  app.post("/api/auth/login", authLimiter, async (req: Request, res: Response) => {
-    try {
-      const { username, password } = req.body;
-
-      if (!username || !password) {
-        res.status(400).json({ error: "INVALID_INPUT", message: "Username and password are required" });
-        return;
-      }
-
-      const user = await storage.validateCredentials(username, password);
-      if (!user) {
-        res.status(401).json({ error: "INVALID_CREDENTIALS", message: "Invalid username or password" });
-        return;
-      }
-
-      const session = await storage.createSession(user.id, user.username);
-      const token = signToken({ userId: user.id, username: user.username });
-
-      res.json({
-        user: { id: user.id, username: user.username, createdAt: user.createdAt },
-        token,
-        expiresAt: new Date(session.expiresAt).toISOString(),
-      });
-    } catch (error: any) {
-      console.error("[Auth] Login error:", error);
-      res.status(500).json({ error: "LOGIN_FAILED", message: "Login failed" });
+    if (!password || typeof password !== "string") {
+      res.status(400).json({ error: "INVALID_INPUT", message: "Password is required" });
+      return;
     }
-  });
 
-  app.post("/api/auth/logout", authenticate, async (req: Request, res: Response) => {
-    try {
-      const token = req.headers.authorization?.replace("Bearer ", "");
-      if (token) {
-        await storage.invalidateSession(token);
-      }
-      res.json({ success: true });
-    } catch (error: any) {
-      console.error("[Auth] Logout error:", error);
-      res.status(500).json({ error: "LOGOUT_FAILED", message: "Logout failed" });
+    if (password.length < 8) {
+      res.status(400).json({ error: "WEAK_PASSWORD", message: "Password must be at least 8 characters" });
+      return;
     }
-  });
+
+    const user = await storage.createUser({ username, password });
+    const session = await storage.createSession(user.id, user.username);
+    const token = signToken({ userId: user.id, username: user.username });
+
+    res.status(201).json({
+      user: { id: user.id, username: user.username, createdAt: user.createdAt },
+      token,
+      expiresAt: new Date(session.expiresAt).toISOString(),
+    });
+  }));
+
+  app.post(`${API_PREFIX}/auth/login`, authLimiter, wrap(async (req: Request, res: Response) => {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      res.status(400).json({ error: "INVALID_INPUT", message: "Username and password are required" });
+      return;
+    }
+
+    const user = await storage.validateCredentials(username, password);
+    if (!user) {
+      res.status(401).json({ error: "INVALID_CREDENTIALS", message: "Invalid username or password" });
+      return;
+    }
+
+    const session = await storage.createSession(user.id, user.username);
+    const token = signToken({ userId: user.id, username: user.username });
+
+    res.json({
+      user: { id: user.id, username: user.username, createdAt: user.createdAt },
+      token,
+      expiresAt: new Date(session.expiresAt).toISOString(),
+    });
+  }));
+
+  app.post(`${API_PREFIX}/auth/logout`, authenticate, wrap(async (req: Request, res: Response) => {
+    const token = req.headers.authorization?.replace("Bearer ", "");
+    if (token) {
+      await storage.invalidateSession(token);
+    }
+    res.json({ success: true });
+  }));
 
   // ===== USER PROFILE ROUTES =====
 
-  app.get("/api/user", authenticate, async (req: Request, res: Response) => {
-    try {
-      const user = (req as any).user;
-      const fullUser = await storage.getUser(user.userId);
-      if (!fullUser) {
-        res.status(404).json({ error: "NOT_FOUND", message: "User not found" });
-        return;
-      }
-      res.json({ id: fullUser.id, username: fullUser.username, createdAt: fullUser.createdAt });
-    } catch (error: any) {
-      console.error("[User] Get error:", error);
-      res.status(500).json({ error: "GET_USER_FAILED", message: "Failed to get user" });
+  app.get(`${API_PREFIX}/user`, authenticate, wrap(async (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const fullUser = await storage.getUser(user.userId);
+    if (!fullUser) {
+      res.status(404).json({ error: "NOT_FOUND", message: "User not found" });
+      return;
     }
-  });
+    res.json({ id: fullUser.id, username: fullUser.username, createdAt: fullUser.createdAt });
+  }));
+
+  // ===== DATA DELETION (COPPA Compliance) =====
+
+  app.delete(`${API_PREFIX}/user/data`, authenticate, wrap(async (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const fullUser = await storage.getUser(user.userId);
+    if (!fullUser) {
+      res.status(404).json({ error: "NOT_FOUND", message: "User not found" });
+      return;
+    }
+
+    // Delete user and all related data
+    await storage.deleteUserData(user.userId);
+
+    res.json({
+      success: true,
+      message: "All user data has been permanently deleted.",
+      deletedAt: new Date().toISOString(),
+    });
+  }));
+
+  // Parent can delete child's data
+  app.delete(`${API_PREFIX}/user/:childId/data`, authenticate, requireParent, wrap(async (req: Request, res: Response) => {
+    const { childId } = req.params as { childId: string };
+
+    if (!childId) {
+      res.status(400).json({ error: "INVALID_INPUT", message: "Child user ID is required" });
+      return;
+    }
+
+    // Verify the child is linked to this parent
+    const parentId = (req as any).user.userId;
+    const isLinked = await storage.isChildLinkedToParent(childId, parentId);
+    if (!isLinked) {
+      res.status(403).json({ error: "FORBIDDEN", message: "Child is not linked to this parent account" });
+      return;
+    }
+
+    await storage.deleteUserData(childId);
+
+    res.json({
+      success: true,
+      message: "Child's data has been permanently deleted.",
+      deletedAt: new Date().toISOString(),
+    });
+  }));
 
   // ===== HABITS ROUTES =====
 
-  app.get("/api/habits", authenticate, async (req: Request, res: Response) => {
-    try {
-      // For local server, we don't have the mobile database
-      // This is a placeholder for the API structure
-      res.json({ habits: [], message: "Habits synced from mobile app" });
-    } catch (error: any) {
-      console.error("[Habits] Get error:", error);
-      res.status(500).json({ error: "GET_HABITS_FAILED", message: "Failed to get habits" });
+  app.get(`${API_PREFIX}/habits`, authenticate, wrap(async (_req: Request, res: Response) => {
+    res.json({ habits: [], message: "Habits synced from mobile app" });
+  }));
+
+  app.post(`${API_PREFIX}/habits`, authenticate, wrap(async (req: Request, res: Response) => {
+    const { name, icon, coinReward, color, frequency } = req.body;
+
+    if (!name || typeof name !== "string") {
+      res.status(400).json({ error: "INVALID_INPUT", message: "Habit name is required" });
+      return;
     }
-  });
 
-  app.post("/api/habits", authenticate, async (req: Request, res: Response) => {
-    try {
-      const { name, icon, coinReward, color, frequency } = req.body;
+    res.status(201).json({
+      id: crypto.randomUUID(),
+      name,
+      icon: icon || "star",
+      coinReward: coinReward || 10,
+      color: color || "#4A90D9",
+      frequency: frequency || "daily",
+      createdAt: new Date().toISOString(),
+    });
+  }));
 
-      if (!name || typeof name !== "string") {
-        res.status(400).json({ error: "INVALID_INPUT", message: "Habit name is required" });
-        return;
-      }
-
-      res.status(201).json({
-        id: crypto.randomUUID(),
-        name,
-        icon: icon || "star",
-        coinReward: coinReward || 10,
-        color: color || "#4A90D9",
-        frequency: frequency || "daily",
-        createdAt: new Date().toISOString(),
-      });
-    } catch (error: any) {
-      console.error("[Habits] Create error:", error);
-      res.status(500).json({ error: "CREATE_HABIT_FAILED", message: "Failed to create habit" });
+  app.put(`${API_PREFIX}/habits/:id`, authenticate, wrap(async (req: Request, res: Response) => {
+    const { id } = req.params;
+    if (!id) {
+      res.status(400).json({ error: "INVALID_INPUT", message: "Habit ID is required" });
+      return;
     }
-  });
+    res.json({ id, ...req.body, updatedAt: new Date().toISOString() });
+  }));
 
-  app.put("/api/habits/:id", authenticate, async (req: Request, res: Response) => {
-    try {
-      const { id } = req.params;
-      if (!id) {
-        res.status(400).json({ error: "INVALID_INPUT", message: "Habit ID is required" });
-        return;
-      }
-      res.json({ id, ...req.body, updatedAt: new Date().toISOString() });
-    } catch (error: any) {
-      console.error("[Habits] Update error:", error);
-      res.status(500).json({ error: "UPDATE_HABIT_FAILED", message: "Failed to update habit" });
+  app.delete(`${API_PREFIX}/habits/:id`, authenticate, requireParent, wrap(async (req: Request, res: Response) => {
+    const { id } = req.params;
+    if (!id) {
+      res.status(400).json({ error: "INVALID_INPUT", message: "Habit ID is required" });
+      return;
     }
-  });
-
-  app.delete("/api/habits/:id", authenticate, requireParent, async (req: Request, res: Response) => {
-    try {
-      const { id } = req.params;
-      if (!id) {
-        res.status(400).json({ error: "INVALID_INPUT", message: "Habit ID is required" });
-        return;
-      }
-      res.json({ success: true, deletedId: id });
-    } catch (error: any) {
-      console.error("[Habits] Delete error:", error);
-      res.status(500).json({ error: "DELETE_HABIT_FAILED", message: "Failed to delete habit" });
-    }
-  });
+    res.json({ success: true, deletedId: id });
+  }));
 
   // ===== REWARDS ROUTES =====
 
-  app.get("/api/rewards", authenticate, async (req: Request, res: Response) => {
-    try {
-      res.json({ rewards: [], message: "Rewards synced from mobile app" });
-    } catch (error: any) {
-      console.error("[Rewards] Get error:", error);
-      res.status(500).json({ error: "GET_REWARDS_FAILED", message: "Failed to get rewards" });
+  app.get(`${API_PREFIX}/rewards`, authenticate, wrap(async (_req: Request, res: Response) => {
+    res.json({ rewards: [], message: "Rewards synced from mobile app" });
+  }));
+
+  app.post(`${API_PREFIX}/rewards`, authenticate, requireParent, wrap(async (req: Request, res: Response) => {
+    const { name, icon, cost, color } = req.body;
+
+    if (!name || typeof name !== "string") {
+      res.status(400).json({ error: "INVALID_INPUT", message: "Reward name is required" });
+      return;
     }
-  });
 
-  app.post("/api/rewards", authenticate, requireParent, async (req: Request, res: Response) => {
-    try {
-      const { name, icon, cost, color } = req.body;
+    res.status(201).json({
+      id: crypto.randomUUID(),
+      name,
+      icon: icon || "gift",
+      cost: cost || 100,
+      color: color || "#8B5CF6",
+      createdAt: new Date().toISOString(),
+    });
+  }));
 
-      if (!name || typeof name !== "string") {
-        res.status(400).json({ error: "INVALID_INPUT", message: "Reward name is required" });
-        return;
+  app.post(`${API_PREFIX}/rewards/:id/redeem`, authenticate, wrap(async (req: Request, res: Response) => {
+    const { id } = req.params;
+    if (!id) {
+      res.status(400).json({ error: "INVALID_INPUT", message: "Reward ID is required" });
+      return;
+    }
+    res.json({
+      id: crypto.randomUUID(),
+      rewardId: id,
+      redeemedAt: new Date().toISOString(),
+    });
+  }));
+
+  // ===== NOTIFICATIONS ROUTES =====
+
+  registerNotificationRoutes(app, API_PREFIX, authenticate);
+
+  // ===== REMOTE CONFIG ROUTES =====
+
+  app.get(`${API_PREFIX}/feature-flags`, authenticate, wrap(async (_req: Request, res: Response) => {
+    // Load remote flags (currently just returns effective flags)
+    const flags = await loadRemoteFeatureFlags(); // returns number updated; we ignore for now
+    const effective = Object.fromEntries(
+      Object.values(FeatureFlag).map(flag => [flag, isFeatureEnabled(flag)])
+    );
+    res.json({ effectiveFlags: effective });
+  }));
+
+  app.post(`${API_PREFIX}/feature-flags/override`, authenticate, requireParent, wrap(async (req: Request, res: Response) => {
+    const overrides = req.body as Partial<Record<string, boolean | null>>;
+    if (typeof overrides !== "object" || overrides === null) {
+      res.status(400).json({ error: "INVALID_INPUT", message: "Payload must be a JSON object" });
+      return;
+    }
+    const keys = Object.keys(overrides);
+    for (const k of keys) {
+      const flag = FeatureFlag[k as keyof typeof FeatureFlag];
+      if (flag && overrides[k] !== undefined) {
+        if (overrides[k] === null) {
+          setFeatureFlag(flag, null);
+        } else {
+          setFeatureFlag(flag, overrides[k]);
+        }
       }
-
-      res.status(201).json({
-        id: crypto.randomUUID(),
-        name,
-        icon: icon || "gift",
-        cost: cost || 100,
-        color: color || "#8B5CF6",
-        createdAt: new Date().toISOString(),
-      });
-    } catch (error: any) {
-      console.error("[Rewards] Create error:", error);
-      res.status(500).json({ error: "CREATE_REWARD_FAILED", message: "Failed to create reward" });
     }
-  });
-
-  app.post("/api/rewards/:id/redeem", authenticate, async (req: Request, res: Response) => {
-    try {
-      const { id } = req.params;
-      if (!id) {
-        res.status(400).json({ error: "INVALID_INPUT", message: "Reward ID is required" });
-        return;
-      }
-      res.json({
-        id: crypto.randomUUID(),
-        rewardId: id,
-        redeemedAt: new Date().toISOString(),
-      });
-    } catch (error: any) {
-      console.error("[Rewards] Redeem error:", error);
-      res.status(500).json({ error: "REDEEM_FAILED", message: "Failed to redeem reward" });
-    }
-  });
+    res.json({ success: true, applied: keys });
+  }));
 
   // ===== ADMIN ROUTES (Parent Only) =====
 
-  app.post("/api/admin/bonus", authenticate, requireParent, async (req: Request, res: Response) => {
-    try {
-      const { amount, profileId } = req.body;
+  app.post(`${API_PREFIX}/admin/bonus`, authenticate, requireParent, adminLimiter, wrap(async (req: Request, res: Response) => {
+    const { amount, profileId } = req.body;
 
-      if (!amount || typeof amount !== "number" || amount <= 0) {
-        res.status(400).json({ error: "INVALID_INPUT", message: "Valid amount is required" });
-        return;
-      }
-
-      if (amount > 10000) {
-        res.status(400).json({ error: "AMOUNT_TOO_HIGH", message: "Maximum bonus is 10,000 points" });
-        return;
-      }
-
-      res.json({
-        success: true,
-        amount,
-        profileId: profileId || "default",
-        grantedAt: new Date().toISOString(),
-      });
-    } catch (error: any) {
-      console.error("[Admin] Bonus error:", error);
-      res.status(500).json({ error: "BONUS_FAILED", message: "Failed to add bonus" });
+    if (!amount || typeof amount !== "number" || amount <= 0) {
+      res.status(400).json({ error: "INVALID_INPUT", message: "Valid amount is required" });
+      return;
     }
-  });
 
-  app.post("/api/admin/penalty", authenticate, requireParent, async (req: Request, res: Response) => {
-    try {
-      const { amount, profileId } = req.body;
-
-      if (!amount || typeof amount !== "number" || amount <= 0) {
-        res.status(400).json({ error: "INVALID_INPUT", message: "Valid amount is required" });
-        return;
-      }
-
-      if (amount > 10000) {
-        res.status(400).json({ error: "AMOUNT_TOO_HIGH", message: "Maximum penalty is 10,000 points" });
-        return;
-      }
-
-      res.json({
-        success: true,
-        amount,
-        profileId: profileId || "default",
-        appliedAt: new Date().toISOString(),
-      });
-    } catch (error: any) {
-      console.error("[Admin] Penalty error:", error);
-      res.status(500).json({ error: "PENALTY_FAILED", message: "Failed to apply penalty" });
+    if (amount > 10000) {
+      res.status(400).json({ error: "AMOUNT_TOO_HIGH", message: "Maximum bonus is 10,000 points" });
+      return;
     }
-  });
 
-  app.post("/api/admin/reset-streak", authenticate, requireParent, async (req: Request, res: Response) => {
-    try {
-      const { profileId } = req.body;
-      res.json({
-        success: true,
-        profileId: profileId || "default",
-        resetAt: new Date().toISOString(),
-      });
-    } catch (error: any) {
-      console.error("[Admin] Reset streak error:", error);
-      res.status(500).json({ error: "RESET_FAILED", message: "Failed to reset streak" });
+    res.json({
+      success: true,
+      amount,
+      profileId: profileId || "default",
+      grantedAt: new Date().toISOString(),
+    });
+  }));
+
+  app.post(`${API_PREFIX}/admin/penalty`, authenticate, requireParent, adminLimiter, wrap(async (req: Request, res: Response) => {
+    const { amount, profileId } = req.body;
+
+    if (!amount || typeof amount !== "number" || amount <= 0) {
+      res.status(400).json({ error: "INVALID_INPUT", message: "Valid amount is required" });
+      return;
     }
-  });
+
+    if (amount > 10000) {
+      res.status(400).json({ error: "AMOUNT_TOO_HIGH", message: "Maximum penalty is 10,000 points" });
+      return;
+    }
+
+    res.json({
+      success: true,
+      amount,
+      profileId: profileId || "default",
+      appliedAt: new Date().toISOString(),
+    });
+  }));
+
+  app.post(`${API_PREFIX}/admin/reset-streak`, authenticate, requireParent, wrap(async (req: Request, res: Response) => {
+    const { profileId } = req.body;
+    res.json({
+      success: true,
+      profileId: profileId || "default",
+      resetAt: new Date().toISOString(),
+    });
+  }));
 
   // ===== SYNC ROUTES =====
 
-  app.post("/api/sync/upload", authenticate, async (req: Request, res: Response) => {
-    try {
-      const { habits, rewards, completions, redemptions } = req.body;
-      
-      // Validate structure
-      if (!habits || !Array.isArray(habits)) {
-        res.status(400).json({ error: "INVALID_INPUT", message: "Habits array is required" });
-        return;
-      }
+  app.post(`${API_PREFIX}/sync/upload`, authenticate, wrap(async (req: Request, res: Response) => {
+    const { habits, rewards, completions, redemptions } = req.body;
 
-      // In a real implementation, this would merge with server data
-      // For now, just acknowledge receipt
-      res.json({
-        success: true,
-        syncedHabits: habits.length,
-        syncedRewards: rewards?.length || 0,
-        syncedCompletions: completions?.length || 0,
-        syncedRedemptions: redemptions?.length || 0,
-        syncedAt: new Date().toISOString(),
-      });
-    } catch (error: any) {
-      console.error("[Sync] Upload error:", error);
-      res.status(500).json({ error: "SYNC_FAILED", message: "Failed to sync data" });
+    if (!habits || !Array.isArray(habits)) {
+      res.status(400).json({ error: "INVALID_INPUT", message: "Habits array is required" });
+      return;
     }
-  });
 
-  app.get("/api/sync/download", authenticate, async (req: Request, res: Response) => {
-    try {
-      // Return empty structure - actual data comes from mobile SQLite
-      res.json({
-        habits: [],
-        rewards: [],
-        completions: [],
-        redemptions: [],
-        syncedAt: new Date().toISOString(),
-      });
-    } catch (error: any) {
-      console.error("[Sync] Download error:", error);
-      res.status(500).json({ error: "SYNC_FAILED", message: "Failed to download data" });
-    }
-  });
+    res.json({
+      success: true,
+      syncedHabits: habits.length,
+      syncedRewards: rewards?.length || 0,
+      syncedCompletions: completions?.length || 0,
+      syncedRedemptions: redemptions?.length || 0,
+      syncedAt: new Date().toISOString(),
+    });
+  }));
+
+  app.get(`${API_PREFIX}/sync/download`, authenticate, wrap(async (_req: Request, res: Response) => {
+    res.json({
+      habits: [],
+      rewards: [],
+      completions: [],
+      redemptions: [],
+      syncedAt: new Date().toISOString(),
+    });
+  }));
 
   // ===== HEALTH CHECK =====
-  
-  app.get("/api/health", (req: Request, res: Response) => {
+
+  app.get("/api/health", (_req: Request, res: Response) => {
     res.json({
       status: "ok",
-      timestamp: new Date().toISOString(),
       version: "1.0.0",
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+    });
+  });
+
+  // Legacy /api/v1/health
+  app.get(`${API_PREFIX}/health`, (_req: Request, res: Response) => {
+    res.json({
+      status: "ok",
+      version: "1.0.0",
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
     });
   });
 

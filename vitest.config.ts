@@ -1,33 +1,44 @@
-import { defineConfig } from 'vitest/config';
-import path from 'path';
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
     globals: true,
-    environment: 'node',
-    include: ['__tests__/**/*.test.ts'],
-    exclude: ['node_modules', 'dist', 'static-build'],
+    environment: "node",
+    globalSetup: ["./__tests__/globalSetup.ts"],
+    include: ["__tests__/**/*.test.{ts,tsx}"],
     coverage: {
-      provider: 'v8',
-      reporter: ['text', 'json', 'html'],
+      provider: "v8",
+      reporter: ["text", "json", "html"],
+      include: ["lib/**/*.ts", "components/**/*.tsx", "app/**/*.tsx", "server/**/*.ts"],
       exclude: [
-        'node_modules/**',
-        'dist/**',
-        'static-build/**',
-        '**/*.d.ts',
-        '**/*.config.ts',
-        '__tests__/**',
+        "__tests__/**",
+        "node_modules/**",
+        "*.config.*",
+        "constants/**",
+        "lib/sentry.ts",
       ],
+      thresholds: {
+        statements: 60,
+        branches: 50,
+        functions: 60,
+        lines: 60,
+      },
     },
-    setupFiles: ['./__tests__/setup.ts'],
     testTimeout: 10000,
-    hookTimeout: 10000,
+    // Force Vite to NOT use node_modules for these — always resolve via alias
+    server: {
+      deps: {
+        inline: ["bcrypt", "helmet", "express-rate-limit"],
+      },
+    },
   },
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './'),
-      '@server': path.resolve(__dirname, './server'),
-      '@lib': path.resolve(__dirname, './lib'),
+      // Mock native modules that can't run in Node.js test env
+      bcrypt: new URL("./__tests__/__mocks__/bcrypt.ts", import.meta.url).pathname,
+      helmet: new URL("./__tests__/__mocks__/helmet.ts", import.meta.url).pathname,
+      "express-rate-limit": new URL("./__tests__/__mocks__/rate-limit.ts", import.meta.url).pathname,
+      "expo-modules-core": new URL("./__tests__/__mocks__/expo-modules-core.ts", import.meta.url).pathname,
     },
   },
 });

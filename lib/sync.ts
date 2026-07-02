@@ -3,6 +3,7 @@ import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 import * as storage from './storage';
 import type { MutationEvent, MutationOp, MutationTable, RemoteRecord } from './storage';
+import { FeatureFlag, isFeatureEnabled } from './feature-flags';
 
 // =========================================================================
 // STORAGE KEYS
@@ -863,6 +864,9 @@ export async function shutdownSync(): Promise<void> {
  * bidirectional sync and returns the same shape the old impl did.
  */
 export async function syncWithSupabase(force = false): Promise<{ success: boolean; message: string }> {
+  if (!isFeatureEnabled(FeatureFlag.CLOUD_SYNC)) {
+    return { success: false, message: "Cloud sync disabled by feature flag" };
+  }
   const res = await fullSync({ force });
   return { success: res.success, message: res.message };
 }

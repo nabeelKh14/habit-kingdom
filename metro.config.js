@@ -1,45 +1,28 @@
-const { getDefaultConfig } = require("expo/metro-config");
+const { getDefaultConfig } = require('expo/metro-config');
 
 const config = getDefaultConfig(__dirname);
 
-// Add support for .wasm files - exclude them from transformation
+// Add support for .wasm files
 config.resolver = {
   ...config.resolver,
-  resolverMainFields: ["react-native", "browser", "main"],
-  sourceExts: [
-    ...config.resolver.sourceExts,
-    "wasm",
-  ],
-  assetExts: [
-    ...config.resolver.assetExts,
-    "wasm",
-  ],
+  assetExts: [...config.resolver.assetExts, 'wasm'],
+  sourceExts: [...config.resolver.sourceExts, 'wasm'],
+
+  // Use 'main' before 'react-native' so reanimated's pre-compiled lib/ is used
+  // instead of src/ TypeScript. 'react-native' field in reanimated points to src/.
+  resolverMainFields: ['browser', 'main', 'react-native']
 };
 
-// Fix react-native-worklets web compatibility issue
-config.resolver.resolveRequest = (context, moduleName, platform) => {
-  if (platform === 'web' && moduleName === 'react-native-worklets') {
-    return context.resolveRequest(context, 'react-native-worklets/lib/module/mock.js', platform);
-  }
-  return context.resolveRequest(context, moduleName, platform);
-};
+// Prevent metro from processing node_modules TypeScript
+config.transformer.getTransformOptions = async () => ({
+  transform: {
+    experimentalImportSupport: false,
+    inlineRequires: true,
+  },
+});
 
-// Tell Metro to not transform wasm files
-config.transformer = {
-  ...config.transformer,
-  getTransformOptions: async () => ({
-    transform: {
-      experimentalImportSupport: false,
-      inlineRequires: true,
-    },
-  }),
-  // Use more workers for parallel transformation
-  maxWorkers: 4,
-};
-
-// Exclude wasm from being transformed
-config.resolver.extraNodeModules = {
-  ...config.resolver.extraNodeModules,
-};
+// Exclude react-native-reanimated source TS files - use pre-compiled JS
+config.transformer.unstable_allowRequireContext = true;
+config.watchFolders = [__dirname];
 
 module.exports = config;

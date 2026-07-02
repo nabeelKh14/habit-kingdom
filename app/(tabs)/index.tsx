@@ -11,6 +11,7 @@ import {
   Modal,
   ScrollView,
   Dimensions,
+  ActivityIndicator,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather, Ionicons } from "@expo/vector-icons";
@@ -649,6 +650,16 @@ export default function HabitsScreen() {
   const allHabitsCount = allHabits ? allHabits.length : 0;
 
   const webTopPadding = Platform.OS === "web" ? 67 : 0;
+
+  // Show loading spinner on initial data load
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.loadingContainer, { paddingTop: insets.top + webTopPadding }]}>
+        <ActivityIndicator size="large" color={Colors.primary} />
+        <Text style={styles.loadingText}>Loading your habits...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, { paddingTop: insets.top + webTopPadding }]}>
@@ -1633,5 +1644,15 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontFamily: "Nunito_700Bold",
     color: "#fff",
+  },
+  loadingContainer: {
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 12,
+  },
+  loadingText: {
+    fontSize: 16,
+    fontFamily: "Nunito_500Medium",
+    color: Colors.textSecondary,
   },
 });
