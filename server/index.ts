@@ -1,6 +1,7 @@
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
-import { registerRoutes } from "./routes";
+import compression from "compression";
+import { registerRoutes } from "./routes.js";
 import {
   errorHandler,
   notFound,
@@ -34,6 +35,7 @@ setupCors(app);           // 2. CORS
 setupBodyParsing(app);    // 3. JSON/URL-encoded body parsing
 setupRequestLogging(app); // 4. Request logging with IDs
 setupCsrfProtection(app); // 5. CSRF tokens
+app.use(compression());   // 6. Gzip compression for responses
 app.use("/api", apiLimiter); // 6. Rate limiting
 
 // Static files and Expo routing
@@ -164,7 +166,6 @@ async function startServer() {
     {
       port,
       host,
-      reusePort: true,
     },
     () => {
       log(`\n🚀 Habit Kingdom API Server started`);

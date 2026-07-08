@@ -2,6 +2,7 @@
 
 # dependencies
 node_modules/
+package-lock.json
 
 # Expo
 .expo/
@@ -42,8 +43,14 @@ yarn-error.*
 
 # Build artifacts
 *.apk
+*.aab
 *.err.log
 *.out.log
+*.log
+/tmp/habit-kingdom-server.log
+
+# Temp / generated
+server_dist/
 
 # Temp / generated
 .dreaming/

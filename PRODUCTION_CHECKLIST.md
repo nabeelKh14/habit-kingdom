@@ -73,7 +73,7 @@
 - [✅] Crash-free release (build verified)
 - [✅] iOS privacy manifest (in app.json)
 - [❌] Beta testing (TestFlight/Internal Testing)
-- [❌] Proper app signing (EAS managed)
+- [✅] Proper app signing (production keystore generated + signed APK built)
 
 ### 8. Nice-to-have
 - [✅] Push notifications (full engine: registration, scheduling, delivery, Expo Push API)

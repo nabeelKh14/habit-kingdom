@@ -1,5 +1,6 @@
 import helmet from "helmet";
 import { type Request, type Response, type NextFunction } from "express";
+import { json, urlencoded } from "express";
 import rateLimit from "express-rate-limit";
 import crypto from "node:crypto";
 import dotenv from "dotenv";
@@ -425,7 +426,6 @@ export function setupCors(app: any): void {
 }
 
 export function setupBodyParsing(app: any): void {
-  const { json, urlencoded } = require("express");
   app.use(json({ limit: "1mb" }));
   app.use(urlencoded({ extended: true, limit: "1mb" }));
 }

@@ -11,7 +11,7 @@ COPY package.json pnpm-lock.yaml* ./
 
 # Install all dependencies including devDeps for building/testing
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile
+    pnpm install --frozen-lockfile --ignore-workspace
 
 # Copy source code
 COPY . .
@@ -32,7 +32,7 @@ RUN addgroup -g 1001 -S appgroup && \
 RUN corepack enable && corepack prepare pnpm@9 --activate
 COPY package.json pnpm-lock.yaml* ./
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile --prod
+    pnpm install --frozen-lockfile --prod --ignore-workspace
 
 # Copy build artifacts from builder
 COPY --from=builder /app/server_dist ./server_dist

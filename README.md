@@ -222,17 +222,15 @@ docker run -p 5000:5000 --env-file .env habit-kingdom-api
 
 ### Known Gaps (Non-Blocking):
 - No localization — English only
-- No in-app Terms of Service
 - No automated database backup cron (schema defined, not scheduled)
 - Screenshots not generated
 - Accessibility (screen readers, large text) not audited
-- `build.gradle` build script IDs should be replaced (Nabeel's Expo username is templated)
+- EAS project ID placeholder in `app.json` (set `extra.eas.projectId` after creating Expo project)
+- Sentry DSN not configured (code handles graceful no-op)
+- Terms of Service exists as `TERMS_OF_SERVICE.md` — needs to be hosted at accessible URL
 
 ### Things That Just Work:
-- Full offline mode with sync queue
-- Push notifications end-to-end (client → server → Expo Push API)
-- Parent-restricted controls with COPPA data deletion
-- Apple + Google Sign-In alongside email OTP
-- Error boundaries on every screen with graceful fallbacks
-- 60+ passing tests with comprehensive coverage
-- Docker + CI/CD pipeline ready for deployment
+- **Production keystore generated** (`release.keystore`) — signed APK ready at `habit-kingdom-v1.1.0-release.apk`
+- **JWT_SECRET** set in `.env` (64-char, cryptographically random)
+- **Backend server** runs on `127.0.0.1:5001` (port 5000 is reserved by macOS Control Center)
+- **Pre-existing:** Full offline mode with sync queue, Push notifications end-to-end, Parent-restricted controls with COPPA data deletion, Apple + Google Sign-In alongside email OTP, Error boundaries on every screen, 102 passing tests, Docker + CI/CD pipeline
