@@ -21,8 +21,8 @@
 - [✅] Rate limiting (authLimiter, adminLimiter)
 - [✅] API versioning (/api/v1/)
 - [✅] Logging (structured + request IDs)
-- [✅] Push notification delivery engine (server/notifications.ts + Expo Push API)
-- [❌] Monitoring (Sentry DSN in env — not actively configured)
+- [🔧] Push notification delivery engine (server/notifications.ts + Expo Push API)
+- [✅] Monitoring (Sentry RN SDK wired + initialized in app startup; DSN env-gated)
 
 ### 3. Security (non-negotiable)
 - [✅] HTTPS enforced in production (Helmet hsts)
@@ -40,8 +40,8 @@
 - [✅] Docker (multi-stage Dockerfile + docker-compose.yml)
 - [✅] CI/CD (GitHub Actions: quality gates, security scan, build check, Docker deploy)
 - [❌] Automatic deployments
-- [❌] Monitoring (Sentry, Better Stack, Datadog)
-- [❌] Analytics (PostHog)
+- [✅] Monitoring (Sentry RN SDK wired + initialized; env-gated)
+- [✅] Analytics (PostHog v4 wired + initialized in app startup; env-gated)
 - [❌] CDN for assets (Cloudflare)
 
 ### 5. Performance
