@@ -821,6 +821,16 @@ export async function initializeSync(opts: SyncOptions = {}): Promise<void> {
       const uid = session?.user?.id ?? null;
       setState({ userId: uid });
       if (uid) {
+        // Analytics + error monitoring identity (anonymized only)
+        try {
+          const { setSentryUser, addBreadcrumb } = await import('./sentry');
+          setSentryUser(uid);
+          addBreadcrumb('auth:signed_in');
+        } catch {}
+        try {
+          const { identifyUser } = await import('./analytics');
+          identifyUser(uid);
+        } catch {}
         await subscribeToRealtime({ userId: uid });
         fullSync({ userId: uid }).catch(err => console.warn('[SYNC] onAuth sync:', err));
       }
@@ -828,6 +838,15 @@ export async function initializeSync(opts: SyncOptions = {}): Promise<void> {
       setState({ userId: null, status: 'unauthenticated' });
       await unsubscribeFromRealtime();
       await clearMutationQueue();
+      // Clear monitoring identity on logout
+      try {
+        const { clearSentryUser } = await import('./sentry');
+        clearSentryUser();
+      } catch {}
+      try {
+        const { resetUser } = await import('./analytics');
+        resetUser();
+      } catch {}
     }
   });
   authUnsubscribe = () => { try { authSub.subscription.unsubscribe(); } catch {} };

@@ -70,7 +70,14 @@
       ],
       "expo-font",
       "expo-web-browser",
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "@sentry/react-native/expo",
+        {
+          "organization": "your-sentry-org",
+          "project": "habit-kingdom"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

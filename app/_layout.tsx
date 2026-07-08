@@ -21,8 +21,13 @@ import { setActiveProfileId, getProfiles } from "../lib/storage";
 import { supabase } from "../lib/supabase";
 import OnboardingScreen from "./onboarding";
 import Colors from "../constants/colors";
+import { initMonitoring, captureError as captureMonitoringError } from "../lib/monitoring";
 
 SplashScreen.preventAutoHideAsync();
+
+// Boot monitoring (Sentry + PostHog) as early as possible.
+// Env-gated: no-ops when keys are absent.
+initMonitoring().catch((e) => console.warn("[Monitoring] boot failed:", e));
 
 // =========================================================================
 // NOTIFICATION HANDLER — dynamically loaded to avoid Expo Go crash
@@ -283,7 +288,7 @@ export default function RootLayout() {
   console.log("[DEBUG] Proceeding to render app, fontsLoaded:", fontsLoaded);
 
   return (
-    <ErrorBoundary>
+    <ErrorBoundary onError={(error) => captureMonitoringError(error)}>
       <QueryClientProvider client={queryClient}>
         <GestureHandlerRootView>
           <KeyboardProvider>
