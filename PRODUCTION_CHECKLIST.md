@@ -16,7 +16,7 @@
 ### 2. Backend
 - [✅] Authentication (JWT + Email OTP)
 - [✅] Apple/Google Sign-In (Supabase OAuth, cross-platform)
-- [❌] Database backups (automated — schema defined, no cron yet)
+- [✅] Database backups (scripts/backup.mjs — AES-256-CBC encrypted pg_dump + 7-day retention, scheduled via launchd plist; wired nightly/2026-07-10)
 - [✅] Input validation on every endpoint (sanitizeInput middleware)
 - [✅] Rate limiting (authLimiter, adminLimiter)
 - [✅] API versioning (/api/v1/)
@@ -50,7 +50,7 @@
 - [🔧] Image optimization (adaptive icons generated, reanimated animations)
 - [❌] Lazy loading (modals use presentation:"modal" — efficient)
 - [❌] Pagination
-- [❌] Compression (server-side gzip not configured)
+- [✅] Compression (server-side gzip via compression() middleware in server/index.ts)
 - [✅] Fast startup (<2-3 s)
 
 ### 6. Kids App Requirements
@@ -65,7 +65,7 @@
 
 ### 7. Store Readiness
 - [✅] Privacy Policy (PRIVACY.md — compliant, linked in app.json)
-- [❌] Terms of Service
+- [✅] Terms of Service (TERMS_OF_SERVICE.md + termsOfServiceUrl wired in app.json)
 - [✅] App icons (1024x1024 store icon + adaptive Android icons)
 - [✅] Splash screen (splash-icon.png)
 - [❌] Screenshots (needs real device captures)

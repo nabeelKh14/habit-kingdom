@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.habittracker.backup</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>node</string>
+    <string>/Users/openclaw/habit-kingdom/scripts/backup.mjs</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/openclaw/habit-kingdom</string>
+
+  <!-- Run daily at 03:00 local time -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NODE_ENV</key>
+    <string>production</string>
+    <key>DATABASE_URL</key>
+    <string>REPLACE_WITH_SUPABASE_CONNECTION_STRING</string>
+    <key>HK_BACKUP_PASSPHRASE</key>
+    <string>REPLACE_WITH_STRONG_PASSPHRASE</string>
+    <key>HK_BACKUP_DIR</key>
+    <string>/Users/openclaw/habit-kingdom/backups</string>
+    <key>HK_BACKUP_RETENTION</key>
+    <string>7</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/openclaw/habit-kingdom/logs/backup.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/openclaw/habit-kingdom/logs/backup.err.log</string>
+
+  <!-- Will not run immediately on load; waits for the scheduled time. -->
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>

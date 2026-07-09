@@ -10,6 +10,7 @@
     "newArchEnabled": true,
     "description": "A fun habit tracker for kids. Build kingdoms by completing daily habits, earn coins, and unlock rewards with parental controls.",
     "privacyPolicyUrl": "https://habittracker.app/privacy",
+    "termsOfServiceUrl": "https://habittracker.app/terms",
     "primaryColor": "#4A90D9",
     "backgroundColor": "#E6F4FE",
     "splash": {

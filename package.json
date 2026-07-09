@@ -22,7 +22,10 @@
     "build:android:release": "cd android && JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=~/Library/Android/sdk ./gradlew assembleRelease",
     "build:android:release:fast": "cd android && ./gradlew.bat assembleRelease -PreactNativeArchitectures=arm64-v8a",
     "build:android:release:all": "cd android && ./gradlew.bat assembleRelease",
-    "build:android:debug:fast": "cd android && ./gradlew.bat assembleDebug -PreactNativeArchitectures=arm64-v8a"
+    "build:android:debug:fast": "cd android && ./gradlew.bat assembleDebug -PreactNativeArchitectures=arm64-v8a",
+    "backup": "node scripts/backup.mjs",
+    "backup:install": "launchctl load ~/habit-kingdom/scripts/com.habittracker.backup.plist",
+    "backup:uninstall": "launchctl unload ~/habit-kingdom/scripts/com.habittracker.backup.plist"
   },
   "dependencies": {
     "@babel/plugin-proposal-private-property-in-object": "^7.21.11",
