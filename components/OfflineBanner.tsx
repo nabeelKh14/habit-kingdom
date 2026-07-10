@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { StyleSheet, View, Text, Animated, Platform } from "react-native";
+import { StyleSheet, Text, Animated, Platform } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 
@@ -58,7 +58,7 @@ export function OfflineBanner() {
       accessibilityLiveRegion="polite"
     >
       <Feather name="wifi-off" size={16} color="#FFFFFF" style={styles.icon} />
-      <Text style={styles.text}>You're offline — changes will sync when connected</Text>
+      <Text style={styles.text}>You&apos;re offline — changes will sync when connected</Text>
     </Animated.View>
   );
 }
