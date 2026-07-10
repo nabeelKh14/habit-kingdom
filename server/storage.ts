@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import * as bcrypt from "bcrypt";
 import type { ServerUser, UserSession } from "../shared/types";
+import { pool, isSupabaseConfigured } from "./db";
 
 // Configuration
 const SALT_ROUNDS = 12;
@@ -30,29 +31,60 @@ export interface IStorage {
 
   // Verify parent-child relationship
   isChildLinkedToParent(childId: string, parentId: string): Promise<boolean>;
+
+  // Create a parent<->child family link (1 or 2 parents per child)
+  linkChildToParent(parentId: string, childId: string): Promise<void>;
+
+  // List child ids linked to a parent
+  getChildrenOfParent(parentId: string): Promise<string[]>;
 }
 
+/**
+ * Durable storage backed by Postgres (direct pool) when configured.
+ * Falls back to in-memory Maps when DB env is absent (dev / tests), so the
+ * server always boots. Sessions are intentionally in-memory (ephemeral
+ * tokens); only durable user + family data hits Postgres.
+ */
 export class SecureStorage implements IStorage {
   private users: Map<string, User>;
   private sessions: Map<string, UserSession>;
+  // in-memory family links (parentId -> Set<childId>) for fallback mode
+  private familyLinks: Map<string, Set<string>>;
 
   constructor() {
     this.users = new Map();
     this.sessions = new Map();
+    this.familyLinks = new Map();
+  }
+
+  private rowToUser(row: any): User {
+    return {
+      id: row.id,
+      username: row.username,
+      passwordHash: row.password_hash,
+      createdAt: row.created_at,
+    };
   }
 
   async getUser(id: string): Promise<User | undefined> {
+    if (pool) {
+      const { rows } = await pool.query("SELECT * FROM server_users WHERE id = $1", [id]);
+      return rows[0] ? this.rowToUser(rows[0]) : undefined;
+    }
     return this.users.get(id);
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
+    if (pool) {
+      const { rows } = await pool.query("SELECT * FROM server_users WHERE LOWER(username) = LOWER($1)", [username]);
+      return rows[0] ? this.rowToUser(rows[0]) : undefined;
+    }
     return Array.from(this.users.values()).find(
-      (user) => user.username.toLowerCase() === username.toLowerCase()
+      (u) => u.username.toLowerCase() === username.toLowerCase()
     );
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    // Validate input
     if (!insertUser.username || insertUser.username.length < 3) {
       throw new Error("Username must be at least 3 characters");
     }
@@ -60,67 +92,62 @@ export class SecureStorage implements IStorage {
       throw new Error("Password must be at least 6 characters");
     }
 
-    // Check for existing user
-    const existing = await this.getUserByUsername(insertUser.username);
-    if (existing) {
-      throw new Error("Username already exists");
-    }
-
-    // Hash password
     const passwordHash = await bcrypt.hash(insertUser.password, SALT_ROUNDS);
 
-    const id = randomUUID();
+    if (pool) {
+      try {
+        const { rows } = await pool.query(
+          "INSERT INTO server_users (username, password_hash) VALUES ($1, $2) RETURNING *",
+          [insertUser.username, passwordHash]
+        );
+        return this.rowToUser(rows[0]);
+      } catch (e: any) {
+        if (e.code === "23505") throw new Error("Username already exists");
+        throw e;
+      }
+    }
+
+    // in-memory fallback
+    if (await this.getUserByUsername(insertUser.username)) {
+      throw new Error("Username already exists");
+    }
     const user: User = {
-      id,
+      id: randomUUID(),
       username: insertUser.username,
       passwordHash,
       createdAt: new Date().toISOString(),
     };
-
-    this.users.set(id, user);
+    this.users.set(user.id, user);
     return user;
   }
 
   async validateCredentials(username: string, password: string): Promise<User | null> {
-    if (!username || !password) {
-      return null;
-    }
-
+    if (!username || !password) return null;
     const user = await this.getUserByUsername(username);
-    if (!user) {
-      return null;
-    }
-
+    if (!user) return null;
     const isValid = await bcrypt.compare(password, user.passwordHash);
     return isValid ? user : null;
   }
 
   async createSession(userId: string, username: string): Promise<UserSession> {
     const token = randomUUID() + "-" + randomUUID();
-    const expiresAt = Date.now() + TOKEN_EXPIRY;
-
     const session: UserSession = {
       token,
       userId,
       username,
-      expiresAt,
+      expiresAt: Date.now() + TOKEN_EXPIRY,
     };
-
     this.sessions.set(token, session);
     return session;
   }
 
   async validateSession(token: string): Promise<UserSession | null> {
     const session = this.sessions.get(token);
-    if (!session) {
-      return null;
-    }
-
+    if (!session) return null;
     if (session.expiresAt < Date.now()) {
       this.sessions.delete(token);
       return null;
     }
-
     return session;
   }
 
@@ -130,30 +157,62 @@ export class SecureStorage implements IStorage {
 
   async invalidateAllSessions(userId: string): Promise<void> {
     for (const [token, session] of this.sessions.entries()) {
-      if (session.userId === userId) {
-        this.sessions.delete(token);
-      }
+      if (session.userId === userId) this.sessions.delete(token);
     }
   }
 
-  // COPPA compliance: permanently delete all user data
   async deleteUserData(userId: string): Promise<void> {
-    this.users.delete(userId);
-    for (const [token, session] of this.sessions.entries()) {
-      if (session.userId === userId) {
-        this.sessions.delete(token);
-      }
+    this.invalidateAllSessions(userId);
+    if (pool) {
+      await pool.query("DELETE FROM family_links WHERE parent_id = $1", [userId]);
+      await pool.query("DELETE FROM server_users WHERE id = $1", [userId]);
+    } else {
+      this.users.delete(userId);
+      this.familyLinks.delete(userId);
     }
     console.log(`[Data Deletion] Permanently deleted all data for user ${userId}`);
   }
 
-  // Verify parent-child relationship (in-memory stub)
   async isChildLinkedToParent(childId: string, parentId: string): Promise<boolean> {
-    // In production, query DB for child-parent link
-    // For now, allow if both users exist
-    const child = this.users.get(childId);
-    const parent = this.users.get(parentId);
-    return !!child && !!parent;
+    if (pool) {
+      const { rows } = await pool.query(
+        "SELECT 1 FROM family_links WHERE child_id = $1 AND parent_id = $2 LIMIT 1",
+        [childId, parentId]
+      );
+      return rows.length > 0;
+    }
+    return this.familyLinks.get(parentId)?.has(childId) ?? false;
+  }
+
+  async linkChildToParent(parentId: string, childId: string): Promise<void> {
+    if (parentId === childId) throw new Error("A user cannot be their own parent");
+    if (pool) {
+      try {
+        await pool.query(
+          "INSERT INTO family_links (parent_id, child_id) VALUES ($1, $2)",
+          [parentId, childId]
+        );
+      } catch (e: any) {
+        if (e.code === "23514") throw new Error("A child may have at most 2 parents");
+        if (e.code === "23505") throw new Error("Link already exists");
+        throw e;
+      }
+      return;
+    }
+    // in-memory fallback
+    const kids = this.familyLinks.get(parentId) ?? new Set<string>();
+    if (kids.has(childId)) throw new Error("Link already exists");
+    if (kids.size >= 2) throw new Error("A child may have at most 2 parents");
+    kids.add(childId);
+    this.familyLinks.set(parentId, kids);
+  }
+
+  async getChildrenOfParent(parentId: string): Promise<string[]> {
+    if (pool) {
+      const { rows } = await pool.query("SELECT child_id FROM family_links WHERE parent_id = $1", [parentId]);
+      return rows.map((r: any) => r.child_id);
+    }
+    return Array.from(this.familyLinks.get(parentId) ?? []);
   }
 }
 

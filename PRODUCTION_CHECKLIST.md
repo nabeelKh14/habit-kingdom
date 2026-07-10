@@ -86,5 +86,6 @@
 
 ### 9. Backend / Infrastructure (verified this session)
 - [✅] Local Supabase running in Docker (`supabase start`); migrations `0001` (base schema) + `0002` (family relationships: 1–2 parents ↔ N children, per-child habits/rewards/points/avatar) applied and **RLS-verified**.
-- [🔧] Supabase **persistence not yet wired into the app/server runtime** — `server/storage.ts` is still in-memory and the `supabase.from()` calls are commented out. The schema + RLS are proven; the data-access layer still needs to call them (next step).
+- [✅] **Server persistence wired to Supabase** (Option B done). `SecureStorage` now talks to Postgres directly (via `server/db.ts` `pg` pool using `SUPABASE_DB_URL`), persisting `server_users` + `family_links` (migration `0003`). In-memory fallback when DB env absent. End-to-end verified: register/login/link/COPPA-delete all hit the real local DB; imposter linking blocked.
+- [🔧] Supabase **auth (GoTrue/OAuth)** not yet used by the server — the server remains its own bcrypt auth authority; `server_users` is separate from `auth.users`. (Fine for the current login flow; OAuth would be a later change.)
 - [🔧] Real hosted Supabase project (prod) not provisioned — local only so far.

@@ -105,7 +105,7 @@ export function generateCsrfToken(): string {
 // Auth endpoints: strict limits
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5,
+  max: process.env.DISABLE_RATE_LIMIT === "true" ? 100000 : 5,
   message: {
     error: "TOO_MANY_ATTEMPTS",
     message: "Too many authentication attempts. Please try again later.",

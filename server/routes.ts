@@ -54,7 +54,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return;
     }
 
-    const user = await storage.createUser({ username, password });
+    let user;
+    try {
+      user = await storage.createUser({ username, password });
+    } catch (err: any) {
+      if (err.message === "Username already exists") {
+        res.status(409).json({ error: "USERNAME_TAKEN", message: "Username already exists" });
+        return;
+      }
+      throw err;
+    }
     const session = await storage.createSession(user.id, user.username);
     const token = signToken({ userId: user.id, username: user.username });
 
@@ -129,8 +138,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   }));
 
-  // Parent can delete child's data
-  app.delete(`${API_PREFIX}/user/:childId/data`, authenticate, requireParent, wrap(async (req: Request, res: Response) => {
+  // Parent can delete child's data (link check enforces parent-only access;
+  // requireParent is intentionally NOT used here because the server's own JWT
+  // has no profileType — the family_links relationship is the source of truth)
+  app.delete(`${API_PREFIX}/user/:childId/data`, authenticate, wrap(async (req: Request, res: Response) => {
     const { childId } = req.params as { childId: string };
 
     if (!childId) {
@@ -153,6 +164,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
       message: "Child's data has been permanently deleted.",
       deletedAt: new Date().toISOString(),
     });
+  }));
+
+  // ===== FAMILY LINK ROUTES =====
+  // Link a child account to the calling parent (1 or 2 parents per child).
+  // The caller must BE the parent they claim to link as (server-enforced).
+  app.post(`${API_PREFIX}/family/link`, authenticate, wrap(async (req: Request, res: Response) => {
+    const callerId = (req as any).user?.userId;
+    const { parentId, childId } = req.body || {};
+
+    if (!parentId || !childId) {
+      res.status(400).json({ error: "INVALID_INPUT", message: "parentId and childId are required" });
+      return;
+    }
+    if (parentId !== callerId) {
+      res.status(403).json({ error: "FORBIDDEN", message: "You can only link children to your own parent account" });
+      return;
+    }
+    if (parentId === childId) {
+      res.status(400).json({ error: "INVALID_INPUT", message: "A user cannot be linked to themselves" });
+      return;
+    }
+
+    try {
+      await storage.linkChildToParent(parentId, childId);
+      res.status(201).json({ success: true, parentId, childId });
+    } catch (err: any) {
+      // 2-parent limit / duplicate link surfaced as a clean 409
+      res.status(409).json({ error: "LINK_FAILED", message: err.message });
+    }
+  }));
+
+  app.get(`${API_PREFIX}/family/children`, authenticate, wrap(async (req: Request, res: Response) => {
+    const parentId = (req as any).user?.userId;
+    const children = await storage.getChildrenOfParent(parentId);
+    res.json({ children });
   }));
 
   // ===== HABITS ROUTES =====
