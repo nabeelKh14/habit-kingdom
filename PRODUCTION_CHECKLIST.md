@@ -83,3 +83,8 @@
 - [✅] Dark mode (automatic userInterfaceStyle + feature flag)
 - [❌] A/B testing
 - [❌] Localization (English-only for initial launch)
+
+### 9. Backend / Infrastructure (verified this session)
+- [✅] Local Supabase running in Docker (`supabase start`); migrations `0001` (base schema) + `0002` (family relationships: 1–2 parents ↔ N children, per-child habits/rewards/points/avatar) applied and **RLS-verified**.
+- [🔧] Supabase **persistence not yet wired into the app/server runtime** — `server/storage.ts` is still in-memory and the `supabase.from()` calls are commented out. The schema + RLS are proven; the data-access layer still needs to call them (next step).
+- [🔧] Real hosted Supabase project (prod) not provisioned — local only so far.
