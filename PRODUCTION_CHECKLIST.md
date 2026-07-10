@@ -34,7 +34,7 @@
 - [✅] XSS/CSRF protection (Helmet + sanitizeInput)
 - [✅] Security headers (Helmet with CSP, HSTS, XSS)
 - [✅] Dependency scanning in CI (npm audit + Snyk skeleton)
-- [🔧] Encryption for sensitive data at rest (AES-GCM in schema — not fully wired)
+- [✅] Encryption for sensitive data at rest (AES-256-GCM via server/crypto.ts; encrypts push tokens + PII columns when HK_FIELD_ENCRYPTION_KEY is set, NO-OP fallback otherwise — verified by server tests)
 
 ### 4. Infrastructure
 - [✅] Docker (multi-stage Dockerfile + docker-compose.yml)

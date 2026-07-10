@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { maybeEncrypt, maybeDecrypt, isEncryptionEnabled } from "./crypto";
 
 /**
  * Push notification routes and delivery engine for Habit Kingdom.
@@ -6,6 +7,8 @@ import type { Express, Request, Response } from "express";
  *
  * Architecture:
  * - Client registers Expo push token → server stores in memory (Supabase in production)
+ * - Push tokens are encrypted at rest via AES-256-GCM (HK_FIELD_ENCRYPTION_KEY)
+ *   when that env var is set; otherwise stored cleartext (dev / in-memory mode).
  * - Server sends push via Expo Push API when habits are due
  * - Background job scans habits periodically and sends reminders
  * - Token invalidation on delivery failure (invalidated tokens get cleaned up)
@@ -15,7 +18,7 @@ import type { Express, Request, Response } from "express";
 // IN-MEMORY PUSH TOKEN STORE (replaced by push_tokens table in production)
 // =========================================================================
 interface PushTokenRecord {
-  token: string;
+  token: string; // encrypted-at-rest (hkenc:v1:...) when HK_FIELD_ENCRYPTION_KEY set; cleartext otherwise
   platform: "ios" | "android";
   registeredAt: string;
   isActive: boolean;
@@ -25,7 +28,12 @@ interface PushTokenRecord {
 const pushTokens = new Map<string, PushTokenRecord[]>(); // userId -> tokens[]
 
 function getUserTokens(userId: string): PushTokenRecord[] {
-  return pushTokens.get(userId) ?? [];
+  // Decrypt stored token on read so the rest of the pipeline consumes plaintext.
+  // Records created in NO-OP mode (no key) are already cleartext and pass through.
+  return (pushTokens.get(userId) ?? []).map(t => ({
+    ...t,
+    token: maybeDecrypt(t.token),
+  }));
 }
 
 function addToken(userId: string, record: PushTokenRecord): void {
@@ -34,6 +42,18 @@ function addToken(userId: string, record: PushTokenRecord): void {
   const filtered = tokens.filter(t => t.platform !== record.platform);
   filtered.push(record);
   pushTokens.set(userId, filtered);
+}
+
+// ponytail: store token encrypted at rest when HK_FIELD_ENCRYPTION_KEY is set;
+// getUserTokens() decrypts on read so delivery always gets plaintext.
+function makeTokenRecord(token: string, platform: "ios" | "android"): PushTokenRecord {
+  return {
+    token: maybeEncrypt(token),
+    platform,
+    registeredAt: new Date().toISOString(),
+    isActive: true,
+    lastError: null,
+  };
 }
 
 function invalidateToken(userId: string, token: string, error: string): void {
@@ -262,13 +282,7 @@ export function registerNotificationRoutes(
         ? "android" // FCM tokens are always android
         : platform;
 
-      const record: PushTokenRecord = {
-        token,
-        platform: actualPlatform,
-        registeredAt: new Date().toISOString(),
-        isActive: true,
-        lastError: null,
-      };
+      const record = makeTokenRecord(token, actualPlatform);
 
       addToken(userId, record);
       console.log(`[Notifications] Token registered: user=${userId} platform=${actualPlatform} token_prefix=${token.slice(0, 12)}`);
@@ -439,3 +453,9 @@ export function registerNotificationRoutes(
 
 // Export for use in background jobs
 export { getUserTokens, sendExpoPush, isFCMToken };
+
+// Test-only accessor: lets tests assert what is stored at rest without
+// reaching into the module-private Map. Returns raw (encrypted) records.
+export function __test_getRawStoredTokens(userId: string): PushTokenRecord[] {
+  return pushTokens.get(userId) ?? [];
+}
