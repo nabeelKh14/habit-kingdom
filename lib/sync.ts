@@ -4,6 +4,8 @@ import { supabase } from './supabase';
 import * as storage from './storage';
 import type { MutationEvent, MutationOp, MutationTable, RemoteRecord } from './storage';
 import { FeatureFlag, isFeatureEnabled } from './feature-flags';
+import { pushToServer, pullFromServer } from './server-sync';
+import { ensureServerSession, clearServerSession } from './server-auth';
 
 // =========================================================================
 // STORAGE KEYS
@@ -127,13 +129,13 @@ function isNetworkError(err: any): boolean {
 }
 
 /**
- * Get the current authenticated user id, if any. Returns null when there
- * is no session (anonymous app usage).
+ * Get the current authenticated user id, if any. The app owns auth locally
+ * (onboarding/parent locks); the server session is keyed on the active local
+ * profile id. Returns the active profile id, or null when anonymous.
  */
 export async function getAuthenticatedUserId(): Promise<string | null> {
   try {
-    const { data: { session } } = await supabase.auth.getSession();
-    return session?.user?.id ?? null;
+    return storage.getActiveProfileId() || null;
   } catch (err) {
     console.warn('[SYNC] getAuthenticatedUserId failed:', err);
     return null;
@@ -349,63 +351,28 @@ async function handleLocalMutation(event: MutationEvent): Promise<void> {
 // FLUSH (push queued mutations to Supabase)
 // =========================================================================
 export async function flushMutationQueue(opts: SyncOptions = {}): Promise<{ success: boolean; flushed: number; remaining: number; error?: string }> {
-  if (!(await isSupabaseConfigured())) {
-    return { success: false, flushed: 0, remaining: 0, error: 'Supabase not configured' };
-  }
+  // The server is authoritative; the bulk push already covers all tables, so
+  // flushing the per-row queue is equivalent to a push for the active profile.
   const userId = opts.userId ?? (await getAuthenticatedUserId());
   if (!userId) {
     setState({ status: 'unauthenticated' });
     return { success: false, flushed: 0, remaining: 0, error: 'Not authenticated' };
   }
-
-  let queue = await readQueue();
-  if (queue.length === 0) return { success: true, flushed: 0, remaining: 0 };
-
-  let flushed = 0;
-  const survivors: QueuedMutation[] = [];
-
-  for (const item of queue) {
-    try {
-      if (item.op === 'delete') {
-        const tablePk = item.table === 'wallet' || item.table === 'user_stats' ? 'profile_id' : 'id';
-        const { error } = await supabase.from(item.table).delete().eq(tablePk, item.id);
-        if (error) throw error;
-      } else {
-        const onConflict = item.table === 'wallet' || item.table === 'user_stats' ? 'profile_id' : 'id';
-        const { error } = await supabase.from(item.table).upsert(item.payload, { onConflict });
-        if (error) throw error;
-      }
-      flushed++;
-    } catch (err: any) {
-      const attempts = item.attempts + 1;
-      const lastError = String(err?.message || err);
-      if (isAuthError(err)) {
-        // Stop the flush — we need re-auth
-        survivors.push({ ...item, attempts, lastError });
-        survivors.push(...queue.slice(queue.indexOf(item) + 1));
-        await writeQueue(survivors);
-        setState({ status: 'unauthenticated', error: lastError });
-        return { success: false, flushed, remaining: survivors.length, error: lastError };
-      }
-      if (isNetworkError(err)) {
-        // Keep the rest of the queue intact for next attempt
-        survivors.push({ ...item, attempts, lastError });
-        survivors.push(...queue.slice(queue.indexOf(item) + 1));
-        await writeQueue(survivors);
-        setState({ status: 'offline', error: lastError });
-        return { success: false, flushed, remaining: survivors.length, error: lastError };
-      }
-      if (attempts >= QUEUE_MAX_ATTEMPTS) {
-        console.warn(`[SYNC] dropping mutation after ${attempts} attempts:`, item, err);
-      } else {
-        survivors.push({ ...item, attempts, lastError });
-      }
-    }
+  // Ensure a server session exists for this profile before pushing.
+  const token = await ensureServerSession(userId);
+  if (!token) {
+    setState({ status: 'offline', error: 'Server unreachable' });
+    return { success: false, flushed: 0, remaining: 0, error: 'Server unreachable' };
   }
-
-  await writeQueue(survivors);
-  setState({ lastPushAt: nowIso(), error: null });
-  return { success: true, flushed, remaining: survivors.length };
+  const result = await pushToServer(userId);
+  if (result.success) {
+    // Drain the queue on successful push (server now authoritative for these rows).
+    await writeQueue([]);
+    setState({ lastPushAt: nowIso(), error: null });
+    return { success: true, flushed: result.pushed, remaining: 0 };
+  }
+  setState({ status: 'error', error: result.message });
+  return { success: false, flushed: 0, remaining: 0, error: result.message };
 }
 
 // =========================================================================

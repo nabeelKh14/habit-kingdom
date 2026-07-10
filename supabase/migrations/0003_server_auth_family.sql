@@ -13,7 +13,7 @@
 
 -- 1. SERVER_USERS (the server's auth accounts)
 CREATE TABLE IF NOT EXISTS public.server_users (
-    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    id TEXT PRIMARY KEY,  -- app-generated UUID string
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
@@ -24,9 +24,9 @@ CREATE INDEX IF NOT EXISTS idx_server_users_username ON public.server_users(user
 
 -- 2. FAMILY_LINKS (parent <-> child; a child may have 1 or 2 parents)
 CREATE TABLE IF NOT EXISTS public.family_links (
-    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    parent_id UUID NOT NULL REFERENCES public.server_users(id) ON DELETE CASCADE,
-    child_id UUID NOT NULL REFERENCES public.server_users(id) ON DELETE CASCADE,
+    id TEXT PRIMARY KEY,  -- app-generated UUID string
+    parent_id TEXT NOT NULL REFERENCES public.server_users(id) ON DELETE CASCADE,
+    child_id TEXT NOT NULL REFERENCES public.server_users(id) ON DELETE CASCADE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
     UNIQUE (parent_id, child_id),
     -- a parent cannot also be a child in the same link

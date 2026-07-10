@@ -25,7 +25,8 @@
     "build:android:debug:fast": "cd android && ./gradlew.bat assembleDebug -PreactNativeArchitectures=arm64-v8a",
     "backup": "node scripts/backup.mjs",
     "backup:install": "launchctl load ~/habit-kingdom/scripts/com.habittracker.backup.plist",
-    "backup:uninstall": "launchctl unload ~/habit-kingdom/scripts/com.habittracker.backup.plist"
+    "backup:uninstall": "launchctl unload ~/habit-kingdom/scripts/com.habittracker.backup.plist",
+    "e2e:domain": "node scripts/e2e_domain.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/nunito": "^0.4.2",

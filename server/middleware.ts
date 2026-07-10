@@ -337,19 +337,26 @@ export function errorHandler(
   res: Response,
   _next: NextFunction
 ): void {
-  console.error("[Server Error]", {
-    message: err.message,
-    stack: process.env.NODE_ENV === "development" ? err.stack : undefined,
-    requestId: (req as any).requestId,
-    path: req.path,
-    method: req.method,
-  });
+  const status = (err as any).status ?? (err as any).statusCode ?? 500;
+  // Avoid logging expected (4xx) client errors at error level.
+  if (status >= 500) {
+    console.error("[Server Error]", {
+      message: err.message,
+      stack: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      requestId: (req as any).requestId,
+      path: req.path,
+      method: req.method,
+    });
+  } else {
+    console.log("[Client Error]", { status, message: err.message, path: req.path });
+  }
 
   const isDev = process.env.NODE_ENV === "development";
+  const errorCode = (err as any).code ?? (status === 403 ? "FORBIDDEN" : status === 401 ? "UNAUTHORIZED" : "INTERNAL_ERROR");
 
-  res.status(500).json({
-    error: "INTERNAL_ERROR",
-    message: isDev ? err.message : "An unexpected error occurred",
+  res.status(status).json({
+    error: errorCode,
+    message: isDev ? err.message : (status >= 500 ? "An unexpected error occurred" : err.message),
     requestId: (req as any).requestId,
     ...(isDev && { stack: err.stack }),
   });

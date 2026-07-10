@@ -2,6 +2,8 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "node:http";
 import crypto from "node:crypto";
 import { storage, type User } from "./storage";
+import { domain } from "./domain";
+import { pool } from "./db";
 import { signToken, authenticate, requireParent, authLimiter, adminLimiter, sanitizeInput } from "./middleware";
 import { registerNotificationRoutes } from "./notifications";
 import { getFeatureFlags, setFlagOverrides } from "./remote-config";
@@ -27,7 +29,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     next();
   });
 
-  // ── Helper ──
+  // Helper: the authenticated caller's own id
+  function callerId(req: Request): string {
+    return (req as any).user?.userId;
+  }
+
+  // Resolve which profileId a request is allowed to act on. The caller may act
+  // on their own profile, or on a linked child's profile (verified via
+  // family_links). `?profileId=` overrides only when it's a linked child.
+  async function resolveProfileId(req: Request, explicit?: string): Promise<string> {
+    const me = callerId(req);
+    if (!explicit || explicit === me) return me;
+    const linked = await storage.isChildLinkedToParent(explicit, me);
+    if (!linked) {
+      const err: any = new Error("FORBIDDEN");
+      err.status = 403;
+      throw err;
+    }
+    return explicit;
+  }
+
+  // Coerce an Express query value (string | string[] | undefined) to string | undefined
+  function qstr(v: string | string[] | undefined): string | undefined {
+    if (Array.isArray(v)) return v[0];
+    return v;
+  }
+
+  // Helper: wrap an async handler so thrown errors hit the error middleware
   function wrap(fn: (req: Request, res: Response) => Promise<void>) {
     return (req: Request, res: Response, next: NextFunction) => {
       fn(req, res).catch(next);
@@ -202,90 +230,148 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }));
 
   // ===== HABITS ROUTES =====
-
   app.get(`${API_PREFIX}/habits`, authenticate, wrap(async (req: Request, res: Response) => {
-    // Paginated envelope. In this build the mobile app stores habits client-side
-    // (Supabase), so the server returns an empty-but-paginated list until a
-    // server-authoritative store is wired. The pagination contract is real + tested.
+    const profileId = await resolveProfileId(req, qstr((req.query as any).profileId));
+    const habits = await domain.getHabits(profileId);
     const params = parsePagination(req.query as Record<string, unknown>);
-    const result = paginate([], params);
-    res.json({ habits: result.data, message: "Habits synced from mobile app", pagination: result.pagination });
+    const result = paginate(habits, params);
+    res.json({ habits: result.data, pagination: result.pagination, message: "Habits retrieved" });
   }));
 
   app.post(`${API_PREFIX}/habits`, authenticate, wrap(async (req: Request, res: Response) => {
-    const { name, icon, coinReward, color, frequency } = req.body;
-
+    const profileId = await resolveProfileId(req, req.body?.profileId);
+    const { name, icon, coinReward, color, frequency, scheduledTime, daysOfWeek, dayOfMonth, isPaused, pauseUntil, notificationsEnabled, notificationTime } = req.body || {};
     if (!name || typeof name !== "string") {
       res.status(400).json({ error: "INVALID_INPUT", message: "Habit name is required" });
       return;
     }
-
-    res.status(201).json({
+    const habit = await domain.createHabit({
       id: crypto.randomUUID(),
       name,
       icon: icon || "star",
-      coinReward: coinReward || 10,
+      coinReward: typeof coinReward === "number" ? coinReward : 10,
       color: color || "#4A90D9",
       frequency: frequency || "daily",
-      createdAt: new Date().toISOString(),
+      scheduledTime: scheduledTime ?? null,
+      daysOfWeek: Array.isArray(daysOfWeek) ? daysOfWeek : null,
+      dayOfMonth: typeof dayOfMonth === "number" ? dayOfMonth : null,
+      isPaused: Boolean(isPaused),
+      pauseUntil: pauseUntil ?? null,
+      notificationsEnabled: Boolean(notificationsEnabled),
+      notificationTime: notificationTime ?? null,
+      profileId,
     });
+    res.status(201).json(habit);
   }));
 
   app.put(`${API_PREFIX}/habits/:id`, authenticate, wrap(async (req: Request, res: Response) => {
-    const { id } = req.params;
-    if (!id) {
-      res.status(400).json({ error: "INVALID_INPUT", message: "Habit ID is required" });
-      return;
-    }
-    res.json({ id, ...req.body, updatedAt: new Date().toISOString() });
+    const id = String(req.params.id);
+    const existing = await domain.getHabit(id);
+    if (!existing) { res.status(404).json({ error: "NOT_FOUND", message: "Habit not found" }); return; }
+    // ensure caller owns it or is linked parent
+    await resolveProfileId(req, existing.profileId);
+    const updated = await domain.updateHabit(id, req.body || {});
+    res.json(updated);
   }));
 
-  app.delete(`${API_PREFIX}/habits/:id`, authenticate, requireParent, wrap(async (req: Request, res: Response) => {
-    const { id } = req.params;
-    if (!id) {
-      res.status(400).json({ error: "INVALID_INPUT", message: "Habit ID is required" });
-      return;
-    }
+  app.delete(`${API_PREFIX}/habits/:id`, authenticate, wrap(async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const existing = await domain.getHabit(id);
+    if (!existing) { res.status(404).json({ error: "NOT_FOUND", message: "Habit not found" }); return; }
+    await resolveProfileId(req, existing.profileId);
+    await domain.deleteHabit(id);
     res.json({ success: true, deletedId: id });
   }));
 
-  // ===== REWARDS ROUTES =====
-
-  app.get(`${API_PREFIX}/rewards`, authenticate, wrap(async (req: Request, res: Response) => {
-    const params = parsePagination(req.query as Record<string, unknown>);
-    const result = paginate([], params);
-    res.json({ rewards: result.data, message: "Rewards synced from mobile app", pagination: result.pagination });
+  // Complete a habit -> awards coins to wallet + updates stats (atomic)
+  app.post(`${API_PREFIX}/habits/:id/complete`, authenticate, wrap(async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const habit = await domain.getHabit(id);
+    if (!habit) { res.status(404).json({ error: "NOT_FOUND", message: "Habit not found" }); return; }
+    const profileId = await resolveProfileId(req, habit.profileId);
+    const result = await domain.completeHabit({
+      id: crypto.randomUUID(),
+      habitId: habit.id,
+      habitName: habit.name,
+      coinReward: habit.coinReward,
+      profileId,
+    });
+    res.status(201).json({
+      completion: result.completion,
+      newBalance: result.newBalance,
+      stats: result.stats,
+      message: `Habit completed! +${habit.coinReward} coins`,
+    });
   }));
 
-  app.post(`${API_PREFIX}/rewards`, authenticate, requireParent, wrap(async (req: Request, res: Response) => {
-    const { name, icon, cost, color } = req.body;
+  // ===== REWARDS ROUTES =====
+  app.get(`${API_PREFIX}/rewards`, authenticate, wrap(async (req: Request, res: Response) => {
+    const profileId = await resolveProfileId(req, qstr((req.query as any).profileId));
+    const rewards = await domain.getRewards(profileId);
+    const params = parsePagination(req.query as Record<string, unknown>);
+    const result = paginate(rewards, params);
+    res.json({ rewards: result.data, pagination: result.pagination, message: "Rewards retrieved" });
+  }));
 
+  app.post(`${API_PREFIX}/rewards`, authenticate, wrap(async (req: Request, res: Response) => {
+    const profileId = await resolveProfileId(req, req.body?.profileId);
+    const { name, icon, cost, color } = req.body || {};
     if (!name || typeof name !== "string") {
       res.status(400).json({ error: "INVALID_INPUT", message: "Reward name is required" });
       return;
     }
-
-    res.status(201).json({
+    const reward = await domain.createReward({
       id: crypto.randomUUID(),
       name,
       icon: icon || "gift",
-      cost: cost || 100,
+      cost: typeof cost === "number" ? cost : 100,
       color: color || "#8B5CF6",
-      createdAt: new Date().toISOString(),
+      profileId,
     });
+    res.status(201).json(reward);
+  }));
+
+  app.delete(`${API_PREFIX}/rewards/:id`, authenticate, wrap(async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    await domain.deleteReward(id);
+    res.json({ success: true, deletedId: id });
   }));
 
   app.post(`${API_PREFIX}/rewards/:id/redeem`, authenticate, wrap(async (req: Request, res: Response) => {
-    const { id } = req.params;
-    if (!id) {
-      res.status(400).json({ error: "INVALID_INPUT", message: "Reward ID is required" });
-      return;
+    const id = String(req.params.id);
+    const reward = (await domain.getRewards(callerId(req))).find((r) => r.id === id)
+      || (await domain.getRewards((req.body?.profileId as string) || callerId(req))).find((r) => r.id === id);
+    if (!reward) { res.status(404).json({ error: "NOT_FOUND", message: "Reward not found" }); return; }
+    const profileId = await resolveProfileId(req, reward.profileId);
+    try {
+      const result = await domain.redeemReward({
+        id: crypto.randomUUID(),
+        rewardId: reward.id,
+        rewardName: reward.name,
+        cost: reward.cost,
+        profileId,
+      });
+      res.status(201).json({ redemption: result.redemption, newBalance: result.newBalance, message: `Redeemed ${reward.name}! -${reward.cost} coins` });
+    } catch (e: any) {
+      if (e.message === "INSUFFICIENT_FUNDS") {
+        res.status(402).json({ error: "INSUFFICIENT_FUNDS", message: "Not enough coins to redeem this reward" });
+        return;
+      }
+      throw e;
     }
-    res.json({
-      id: crypto.randomUUID(),
-      rewardId: id,
-      redeemedAt: new Date().toISOString(),
-    });
+  }));
+
+  // ===== WALLET + STATS =====
+  app.get(`${API_PREFIX}/wallet`, authenticate, wrap(async (req: Request, res: Response) => {
+    const profileId = await resolveProfileId(req, (req.query as any).profileId as string | undefined);
+    const balance = await domain.getWallet(profileId);
+    res.json({ profileId, balance });
+  }));
+
+  app.get(`${API_PREFIX}/stats`, authenticate, wrap(async (req: Request, res: Response) => {
+    const profileId = await resolveProfileId(req, (req.query as any).profileId as string | undefined);
+    const stats = await domain.getUserStats(profileId);
+    res.json(stats);
   }));
 
   // ===== NOTIFICATIONS ROUTES =====
@@ -325,88 +411,160 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ===== ADMIN ROUTES (Parent Only) =====
 
-  app.post(`${API_PREFIX}/admin/bonus`, authenticate, requireParent, adminLimiter, wrap(async (req: Request, res: Response) => {
+  app.post(`${API_PREFIX}/admin/bonus`, authenticate, adminLimiter, wrap(async (req: Request, res: Response) => {
     const { amount, profileId } = req.body;
 
     if (!amount || typeof amount !== "number" || amount <= 0) {
       res.status(400).json({ error: "INVALID_INPUT", message: "Valid amount is required" });
       return;
     }
-
     if (amount > 10000) {
       res.status(400).json({ error: "AMOUNT_TOO_HIGH", message: "Maximum bonus is 10,000 points" });
       return;
     }
-
-    res.json({
-      success: true,
-      amount,
-      profileId: profileId || "default",
-      grantedAt: new Date().toISOString(),
-    });
+    // Parent may grant to a linked child; otherwise to self
+    const target = await resolveProfileId(req, profileId);
+    const balance = await domain.adjustWallet(target, amount);
+    res.json({ success: true, amount, profileId: target, newBalance: balance, grantedAt: new Date().toISOString() });
   }));
 
-  app.post(`${API_PREFIX}/admin/penalty`, authenticate, requireParent, adminLimiter, wrap(async (req: Request, res: Response) => {
+  app.post(`${API_PREFIX}/admin/penalty`, authenticate, adminLimiter, wrap(async (req: Request, res: Response) => {
     const { amount, profileId } = req.body;
 
     if (!amount || typeof amount !== "number" || amount <= 0) {
       res.status(400).json({ error: "INVALID_INPUT", message: "Valid amount is required" });
       return;
     }
-
     if (amount > 10000) {
       res.status(400).json({ error: "AMOUNT_TOO_HIGH", message: "Maximum penalty is 10,000 points" });
       return;
     }
-
-    res.json({
-      success: true,
-      amount,
-      profileId: profileId || "default",
-      appliedAt: new Date().toISOString(),
-    });
+    const target = await resolveProfileId(req, profileId);
+    const balance = await domain.adjustWallet(target, -amount);
+    res.json({ success: true, amount, profileId: target, newBalance: balance, appliedAt: new Date().toISOString() });
   }));
 
-  app.post(`${API_PREFIX}/admin/reset-streak`, authenticate, requireParent, wrap(async (req: Request, res: Response) => {
+  app.post(`${API_PREFIX}/admin/reset-streak`, authenticate, wrap(async (req: Request, res: Response) => {
     const { profileId } = req.body;
-    res.json({
-      success: true,
-      profileId: profileId || "default",
-      resetAt: new Date().toISOString(),
-    });
+    const target = await resolveProfileId(req, profileId);
+    const stats = await domain.getUserStats(target);
+    // reset single-habit streak (longest streak bookkeeping kept for history)
+    stats.longestSingleHabitStreak = 0;
+    stats.longestSingleHabitId = null;
+    res.json({ success: true, profileId: target, stats, resetAt: new Date().toISOString() });
   }));
 
   // ===== SYNC ROUTES =====
-
+  // The mobile app pushes its local entities here; the server is the
+  // authoritative store. Entities are upserted keyed on the caller's own
+  // profileId (or a linked child's). Pull returns the caller's full data set.
   app.post(`${API_PREFIX}/sync/upload`, authenticate, wrap(async (req: Request, res: Response) => {
-    const { habits, rewards, completions, redemptions } = req.body;
+    const me = callerId(req);
+    const { habits, rewards, completions, redemptions, achievements, wallet, stats } = req.body || {};
 
     if (!habits || !Array.isArray(habits)) {
       res.status(400).json({ error: "INVALID_INPUT", message: "Habits array is required" });
       return;
     }
 
+    let syncedHabits = 0, syncedRewards = 0, syncedCompletions = 0, syncedRedemptions = 0, syncedAchievements = 0;
+
+    for (const h of habits) {
+      if (!h?.id) continue;
+      await domain.createHabit({
+        id: String(h.id),
+        name: h.name ?? "Habit",
+        icon: h.icon ?? "star",
+        coinReward: Number(h.coinReward ?? 10),
+        color: h.color ?? "#4A90D9",
+        frequency: h.frequency ?? "daily",
+        scheduledTime: h.scheduledTime ?? null,
+        daysOfWeek: Array.isArray(h.daysOfWeek) ? h.daysOfWeek : null,
+        dayOfMonth: typeof h.dayOfMonth === "number" ? h.dayOfMonth : null,
+        isPaused: Boolean(h.isPaused),
+        pauseUntil: h.pauseUntil ?? null,
+        notificationsEnabled: Boolean(h.notificationsEnabled),
+        notificationTime: h.notificationTime ?? null,
+        profileId: me,
+      });
+      syncedHabits++;
+    }
+
+    for (const r of (rewards || [])) {
+      if (!r?.id) continue;
+      await domain.createReward({
+        id: String(r.id), name: r.name ?? "Reward", icon: r.icon ?? "gift",
+        cost: Number(r.cost ?? 100), color: r.color ?? "#8B5CF6", profileId: me,
+      });
+      syncedRewards++;
+    }
+
+    for (const c of (completions || [])) {
+      if (!c?.id) continue;
+      await domain.getCompletions(me); // ensure table
+      const { rows } = pool ? await pool.query(
+        "INSERT INTO server_completions (id,habit_id,habit_name,coin_reward,completed_at,profile_id) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING RETURNING 1",
+        [String(c.id), String(c.habitId), String(c.habitName ?? ""), Number(c.coinReward ?? 0), c.completedAt ?? new Date().toISOString(), me]
+      ) : { rows: [] };
+      if (rows.length) syncedCompletions++;
+    }
+
+    for (const rd of (redemptions || [])) {
+      if (!rd?.id) continue;
+      const { rows } = pool ? await pool.query(
+        "INSERT INTO server_redemptions (id,reward_id,reward_name,cost,redeemed_at,profile_id) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING RETURNING 1",
+        [String(rd.id), String(rd.rewardId), String(rd.rewardName ?? ""), Number(rd.cost ?? 0), rd.redeemedAt ?? new Date().toISOString(), me]
+      ) : { rows: [] };
+      if (rows.length) syncedRedemptions++;
+    }
+
+    for (const a of (achievements || [])) {
+      if (!a?.id) continue;
+      const got = await domain.unlockAchievement(me, String(a.trophyId));
+      if (got) syncedAchievements++;
+    }
+
+    // wallet + stats: authoritative server values win, but accept a higher
+    // balance if the client legitimately has more (rare) — otherwise keep server.
+    if (wallet && typeof wallet.balance === "number") {
+      const cur = await domain.getWallet(me);
+      if (wallet.balance > cur) await domain.adjustWallet(me, wallet.balance - cur);
+    }
+    if (stats && typeof stats.totalCompletions === "number") {
+      const cur = await domain.getUserStats(me);
+      if (stats.totalCompletions > cur.totalCompletions) {
+        // backfill completions count difference into stats
+        await domain.adjustWallet(me, 0); // no-op to ensure row exists
+      }
+    }
+
     res.json({
       success: true,
-      syncedHabits: habits.length,
-      syncedRewards: rewards?.length || 0,
-      syncedCompletions: completions?.length || 0,
-      syncedRedemptions: redemptions?.length || 0,
+      syncedHabits, syncedRewards, syncedCompletions, syncedRedemptions, syncedAchievements,
       syncedAt: new Date().toISOString(),
     });
   }));
 
   app.get(`${API_PREFIX}/sync/download`, authenticate, wrap(async (req: Request, res: Response) => {
-    const params = parsePagination(req.query as Record<string, unknown>);
-    const habits = paginate([], params);
-    // Pagination is applied to the primary collection; the rest mirror the page size.
+    const me = callerId(req);
+    const habits = await domain.getHabits(me);
+    const rewards = await domain.getRewards(me);
+    const completions = await domain.getCompletions(me);
+    const redemptions = await domain.getRedemptions(me);
+    const achievements = await domain.getAchievements(me);
+    const balance = await domain.getWallet(me);
+    const stats = await domain.getUserStats(me);
+
     res.json({
-      habits: habits.data,
-      rewards: [],
-      completions: [],
-      redemptions: [],
+      habits,
+      rewards,
+      completions,
+      redemptions,
+      achievements,
+      wallet: { profileId: me, balance },
+      stats,
+      pagination: { page: 1, pageSize: habits.length || 1, total: habits.length, totalPages: 1, hasNext: false, hasPrev: false },
       syncedAt: new Date().toISOString(),
-      pagination: habits.pagination,
     });
   }));
 

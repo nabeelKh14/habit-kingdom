@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import * as bcrypt from "bcrypt";
 import type { ServerUser, UserSession } from "../shared/types";
 import { pool, isSupabaseConfigured } from "./db";
+import { domain } from "./domain";
 
 // Configuration
 const SALT_ROUNDS = 12;
@@ -95,10 +96,11 @@ export class SecureStorage implements IStorage {
     const passwordHash = await bcrypt.hash(insertUser.password, SALT_ROUNDS);
 
     if (pool) {
+      const id = randomUUID();
       try {
         const { rows } = await pool.query(
-          "INSERT INTO server_users (username, password_hash) VALUES ($1, $2) RETURNING *",
-          [insertUser.username, passwordHash]
+          "INSERT INTO server_users (id, username, password_hash) VALUES ($1, $2, $3) RETURNING *",
+          [id, insertUser.username, passwordHash]
         );
         return this.rowToUser(rows[0]);
       } catch (e: any) {
@@ -164,11 +166,29 @@ export class SecureStorage implements IStorage {
   async deleteUserData(userId: string): Promise<void> {
     this.invalidateAllSessions(userId);
     if (pool) {
-      await pool.query("DELETE FROM family_links WHERE parent_id = $1", [userId]);
+      // COPPA/GDPR-K cascade: purge every server-authoritative domain entity
+      // owned by this user before removing the user row itself. Order matters
+      // only for clarity — these are independent DELETEs, not FK-dependent.
+      const tables = [
+        "server_completions",
+        "server_redemptions",
+        "server_achievements",
+        "server_purchased_skills",
+        "server_wallet",
+        "server_user_stats",
+        "server_rewards",
+        "server_habits",
+      ];
+      for (const t of tables) {
+        await pool.query(`DELETE FROM ${t} WHERE profile_id = $1`, [userId]);
+      }
+      await pool.query("DELETE FROM family_links WHERE parent_id = $1 OR child_id = $1", [userId]);
       await pool.query("DELETE FROM server_users WHERE id = $1", [userId]);
     } else {
       this.users.delete(userId);
       this.familyLinks.delete(userId);
+      // In-memory DomainStore is a separate singleton — clear it too.
+      domain.purgeProfile(userId);
     }
     console.log(`[Data Deletion] Permanently deleted all data for user ${userId}`);
   }
@@ -189,8 +209,8 @@ export class SecureStorage implements IStorage {
     if (pool) {
       try {
         await pool.query(
-          "INSERT INTO family_links (parent_id, child_id) VALUES ($1, $2)",
-          [parentId, childId]
+          "INSERT INTO family_links (id, parent_id, child_id) VALUES ($1, $2, $3)",
+          [randomUUID(), parentId, childId]
         );
       } catch (e: any) {
         if (e.code === "23514") throw new Error("A child may have at most 2 parents");

@@ -18,10 +18,14 @@ import { Pool } from "pg";
 const DB_URL =
   process.env.SUPABASE_DB_URL ||
   (process.env.EXPO_PUBLIC_SUPABASE_URL
-    ? process.env.EXPO_PUBLIC_SUPABASE_URL.replace(/^https?:\/\//, "postgresql://postgres:postgres@").replace(/:\d+$/, ":5432") + "/postgres"
+    ? process.env.EXPO_PUBLIC_SUPABASE_URL.replace(/^https?:\/\//, "postgresql://postgres:***@").replace(/:\d+$/, ":5432") + "/postgres"
     : "");
 
-export const isSupabaseConfigured = Boolean(DB_URL);
+// Explicit opt-out: run with the in-memory store only (offline / CI / local dev
+// with no Postgres reachable). Mirrors the DISABLE_RATE_LIMIT convention.
+const FORCE_IN_MEMORY = process.env.DISABLE_DB === "true";
+
+export const isSupabaseConfigured = Boolean(DB_URL) && !FORCE_IN_MEMORY;
 
 export const pool: Pool | null = isSupabaseConfigured
   ? new Pool({
@@ -34,7 +38,7 @@ export const pool: Pool | null = isSupabaseConfigured
 
 if (!isSupabaseConfigured) {
   console.warn(
-    "[db] No SUPABASE_DB_URL set — server runs WITHOUT durable storage (in-memory fallback)."
+    "[db] No durable DB configured — server runs WITHOUT durable storage (in-memory fallback)."
   );
 } else {
   // Surface connection errors instead of hanging silently
