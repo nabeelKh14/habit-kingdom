@@ -75,8 +75,15 @@ function ClassicTabLayout() {
         name="index"
         options={{
           title: "Habits",
+          tabBarAccessibilityLabel: "Habits",
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="checkmark-circle-outline" size={size} color={color} />
+            <Ionicons
+              name="checkmark-circle-outline"
+              size={size}
+              color={color}
+              accessibilityLabel="Habits"
+              accessibilityRole="image"
+            />
           ),
         }}
       />
@@ -84,8 +91,15 @@ function ClassicTabLayout() {
         name="kingdom"
         options={{
           title: "Kingdom",
+          tabBarAccessibilityLabel: "Kingdom",
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="wallet-outline" size={size} color={color} />
+            <Ionicons
+              name="wallet-outline"
+              size={size}
+              color={color}
+              accessibilityLabel="Kingdom"
+              accessibilityRole="image"
+            />
           ),
         }}
       />
@@ -93,8 +107,15 @@ function ClassicTabLayout() {
         name="rewards"
         options={{
           title: "Rewards",
+          tabBarAccessibilityLabel: "Rewards",
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="gift-outline" size={size} color={color} />
+            <Ionicons
+              name="gift-outline"
+              size={size}
+              color={color}
+              accessibilityLabel="Rewards"
+              accessibilityRole="image"
+            />
           ),
         }}
       />
@@ -102,8 +123,15 @@ function ClassicTabLayout() {
         name="activity"
         options={{
           title: "Activity",
+          tabBarAccessibilityLabel: "Activity",
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="list-outline" size={size} color={color} />
+            <Ionicons
+              name="list-outline"
+              size={size}
+              color={color}
+              accessibilityLabel="Activity"
+              accessibilityRole="image"
+            />
           ),
         }}
       />

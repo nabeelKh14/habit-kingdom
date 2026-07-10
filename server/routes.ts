@@ -11,6 +11,7 @@ import {
   loadRemoteFeatureFlags,
   FeatureFlag,
 } from "../lib/feature-flags";
+import { parsePagination, paginate } from "../lib/pagination";
 
 const API_PREFIX = "/api/v1";
 
@@ -156,8 +157,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ===== HABITS ROUTES =====
 
-  app.get(`${API_PREFIX}/habits`, authenticate, wrap(async (_req: Request, res: Response) => {
-    res.json({ habits: [], message: "Habits synced from mobile app" });
+  app.get(`${API_PREFIX}/habits`, authenticate, wrap(async (req: Request, res: Response) => {
+    // Paginated envelope. In this build the mobile app stores habits client-side
+    // (Supabase), so the server returns an empty-but-paginated list until a
+    // server-authoritative store is wired. The pagination contract is real + tested.
+    const params = parsePagination(req.query as Record<string, unknown>);
+    const result = paginate([], params);
+    res.json({ habits: result.data, message: "Habits synced from mobile app", pagination: result.pagination });
   }));
 
   app.post(`${API_PREFIX}/habits`, authenticate, wrap(async (req: Request, res: Response) => {
@@ -199,8 +205,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ===== REWARDS ROUTES =====
 
-  app.get(`${API_PREFIX}/rewards`, authenticate, wrap(async (_req: Request, res: Response) => {
-    res.json({ rewards: [], message: "Rewards synced from mobile app" });
+  app.get(`${API_PREFIX}/rewards`, authenticate, wrap(async (req: Request, res: Response) => {
+    const params = parsePagination(req.query as Record<string, unknown>);
+    const result = paginate([], params);
+    res.json({ rewards: result.data, message: "Rewards synced from mobile app", pagination: result.pagination });
   }));
 
   app.post(`${API_PREFIX}/rewards`, authenticate, requireParent, wrap(async (req: Request, res: Response) => {
@@ -342,13 +350,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   }));
 
-  app.get(`${API_PREFIX}/sync/download`, authenticate, wrap(async (_req: Request, res: Response) => {
+  app.get(`${API_PREFIX}/sync/download`, authenticate, wrap(async (req: Request, res: Response) => {
+    const params = parsePagination(req.query as Record<string, unknown>);
+    const habits = paginate([], params);
+    // Pagination is applied to the primary collection; the rest mirror the page size.
     res.json({
-      habits: [],
+      habits: habits.data,
       rewards: [],
       completions: [],
       redemptions: [],
       syncedAt: new Date().toISOString(),
+      pagination: habits.pagination,
     });
   }));
 

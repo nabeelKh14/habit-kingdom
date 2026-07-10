@@ -446,12 +446,15 @@ export default function RewardsScreen() {
               setProfileMenuVisible(true);
             }}
             style={styles.profileButton}
+            accessibilityRole="button"
+            accessibilityLabel={`Switch profile. Current: ${activeProfile?.name || 'Profile'}`}
+            accessibilityHint="Opens the profile switcher"
           >
             <View style={styles.profileAvatar}>
               <Ionicons name={activeProfile?.type === 'parent' ? 'person' : 'happy'} size={18} color="#fff" />
             </View>
             <Text style={styles.profileName}>{activeProfile?.name || 'Profile'}</Text>
-            <Ionicons name="chevron-down" size={16} color={Colors.textSecondary} />
+            <Ionicons name="chevron-down" size={16} color={Colors.textSecondary} accessibilityElementsHidden />
           </Pressable>
           <View>
             <Text style={styles.screenTitle}>Rewards</Text>

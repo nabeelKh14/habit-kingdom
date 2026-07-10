@@ -691,8 +691,10 @@ export default function HabitsScreen() {
               router.push("/add-habit");
             }}
             style={styles.addButton}
+            accessibilityRole="button"
+            accessibilityLabel="Add Habit"
           >
-            <Ionicons name="add" size={22} color={Colors.primary} />
+            <Ionicons name="add" size={22} color={Colors.primary} accessibilityElementsHidden />
             <Text style={styles.addButtonText}>Add Habit</Text>
           </Pressable>
         </View>
