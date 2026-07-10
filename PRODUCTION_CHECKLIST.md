@@ -21,7 +21,7 @@
 - [✅] Rate limiting (authLimiter, adminLimiter)
 - [✅] API versioning (/api/v1/)
 - [✅] Logging (structured + request IDs)
-- [🔧] Push notification delivery engine (server/notifications.ts + Expo Push API)
+- [✅] Push notification delivery engine (server/notifications.ts + Expo Push API; client registers token at /api/v1/notifications/register — verified end-to-end)
 - [✅] Monitoring (Sentry RN SDK wired + initialized in app startup; DSN env-gated)
 
 ### 3. Security (non-negotiable)

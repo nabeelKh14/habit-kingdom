@@ -319,9 +319,12 @@ export function sanitizeInput(
     return sanitized;
   };
 
+  // Express 5 exposes req.query/req.params as read-only getters, so we mutate
+  // the underlying objects in place rather than reassigning (which throws).
+  // ponytail: Object.assign onto the live object avoids the "only a getter" trap.
   if (req.body) req.body = sanitize(req.body);
-  if (req.query) req.query = sanitize(req.query);
-  if (req.params) req.params = sanitize(req.params);
+  if (req.query) Object.assign(req.query, sanitize(req.query));
+  if (req.params) Object.assign(req.params, sanitize(req.params));
 
   next();
 }
