@@ -122,15 +122,56 @@ export function getAllFeatureFlags(): Record<FeatureFlag, boolean> {
 }
 
 /**
- * Load flags from a remote config source (e.g., Supabase, Firebase Remote Config).
- * Returns the number of flags updated.
+ * Resolve the base URL of the Habit Kingdom Express server.
+ * Mirrors the convention used by lib/server-sync.ts and lib/server-auth.ts.
  */
-export async function loadRemoteFeatureFlags(serviceUrl?: string): Promise<number> {
+function getApiBaseUrl(): string {
+  const raw = process.env.EXPO_PUBLIC_API_URL;
+  if (!raw) return "https://api.habitkingdom.app";
+  return raw.replace(/\/$/, "");
+}
+
+/**
+ * Load flags from the real remote config source — the Habit Kingdom Express
+ * server's `GET /api/v1/feature-flags` endpoint (server/remote-config.ts).
+ *
+ * This is the ONLY flag source that actually exists in production (there is no
+ * Supabase edge function). The endpoint is authenticated, so the caller must
+ * pass a valid server JWT (obtained via lib/server-auth#getServerToken).
+ *
+ * @param token    A server bearer token (from getServerToken(profileId)).
+ * @param profileId The local profile id, used to derive the token when omitted.
+ * @returns The number of flags that were updated from the server response.
+ */
+export async function loadRemoteFeatureFlags(
+  token?: string | null,
+  profileId?: string | null,
+): Promise<number> {
   try {
-    const url = serviceUrl || `${process.env.EXPO_PUBLIC_SUPABASE_URL || ""}/functions/v1/feature-flags`;
+    // Resolve the token: prefer the explicit one, else derive from the profile.
+    let authToken = token ?? null;
+    if (!authToken && profileId) {
+      try {
+        const { getServerToken } = await import("./server-auth");
+        authToken = await getServerToken(profileId);
+      } catch {
+        authToken = null;
+      }
+    }
+
+    if (!authToken) {
+      // No server session (offline or server not configured) — keep defaults.
+      console.warn("[FeatureFlags] No server token — using default flags");
+      return 0;
+    }
+
+    const url = `${getApiBaseUrl()}/api/v1/feature-flags`;
     const response = await fetch(url, {
       method: "GET",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
     });
 
     if (!response.ok) {
@@ -138,13 +179,24 @@ export async function loadRemoteFeatureFlags(serviceUrl?: string): Promise<numbe
       return 0;
     }
 
-    const data = (await response.json()) as Partial<Record<FeatureFlag, boolean>>;
+    const body = (await response.json()) as {
+      effectiveFlags?: Partial<Record<FeatureFlag, boolean>>;
+    };
+    const data = body.effectiveFlags ?? {};
     setFeatureFlags(data);
     return Object.keys(data).length;
   } catch (err) {
     console.warn("[FeatureFlags] Remote config error (using defaults):", err);
     return 0;
   }
+}
+
+/**
+ * Explicit entrypoint for app boot: fetch remote flags for the active profile.
+ * Safe to call with no active profile — it degrades to defaults and never throws.
+ */
+export async function fetchFeatureFlags(profileId?: string | null): Promise<number> {
+  return loadRemoteFeatureFlags(null, profileId ?? null);
 }
 
 /**

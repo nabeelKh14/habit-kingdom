@@ -238,6 +238,13 @@ export default function RootLayout() {
           }).catch(err => {
             console.error("[SUPABASE] Background sync error:", err);
           });
+
+          // Pull remote feature flags from the Express server so runtime flags
+          // (remote feature flags DoD) are live, not just hardcoded defaults.
+          const { fetchFeatureFlags } = await import("../lib/feature-flags");
+          fetchFeatureFlags(activeId).catch(err => {
+            console.warn("[FeatureFlags] Remote load failed (defaults kept):", err);
+          });
         }
       } catch (error) {
         console.error("Error checking session/onboarding:", error);
