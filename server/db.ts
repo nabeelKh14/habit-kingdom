@@ -1,4 +1,12 @@
 import { Pool } from "pg";
+import dotenv from "dotenv";
+
+// CRITICAL: load .env BEFORE reading process.env below. db.ts is imported
+// (and its module-level consts evaluated) before middleware.ts's dotenv.config()
+// would otherwise run, so without this the server silently fell back to the
+// in-memory store even when SUPABASE_DB_URL was present. (Fixed during final
+// delivery QA — the DB was never actually exercised at runtime before this.)
+dotenv.config();
 
 /**
  * Direct Postgres connection for the Express server (backend service).
