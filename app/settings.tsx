@@ -9,7 +9,6 @@ import {
   Modal,
   Platform,
   Alert,
-  Image,
   TextInput,
   Linking,
 } from "react-native";
@@ -25,7 +24,6 @@ import {
 } from "../lib/settings-storage";
 import {
   getProfiles,
-  getActiveProfile,
   renameProfile,
   removeProfile,
   createProfile,
@@ -57,7 +55,6 @@ export default function SettingsScreen() {
     penaltyAmount: 10,
   });
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState<string | null>(null);
   const [showTimePicker, setShowTimePicker] = useState(false);
@@ -84,11 +81,10 @@ export default function SettingsScreen() {
 
   const loadSettings = async () => {
     try {
-      const [s, icon, p, activeProfile, lastSyncTime] = await Promise.all([
+      const [s, icon, p, lastSyncTime] = await Promise.all([
         getReminderSettings(),
         getCurrentIcon(),
         getProfiles(),
-        getActiveProfile(),
         getLastSyncTime(),
       ]);
       setSettings(s);
@@ -98,7 +94,6 @@ export default function SettingsScreen() {
     } catch (error) {
       console.error("Error loading settings:", error);
     } finally {
-      setLoading(false);
     }
   };
 
@@ -281,7 +276,7 @@ export default function SettingsScreen() {
     try {
       await renameProfile(editingProfile.id, inputValue.trim());
       setProfiles(await getProfiles());
-    } catch (e) {
+    } catch {
       Alert.alert("Error", "Could not rename profile");
     }
     setShowRenameModal(false);
@@ -310,7 +305,7 @@ export default function SettingsScreen() {
             try {
               await removeProfile(profile.id);
               setProfiles(await getProfiles());
-            } catch (e) {
+            } catch {
               Alert.alert("Error", "Could not remove profile");
             }
           }
