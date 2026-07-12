@@ -252,7 +252,13 @@ export const MIGRATIONS: Migration[] = [
       
       for (const table of tables) {
         try {
-          await db.execAsync(`ALTER TABLE ${table} ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
+          // IMPORTANT: ALTER TABLE ADD COLUMN cannot take a non-constant
+          // DEFAULT (e.g. CURRENT_TIMESTAMP) in SQLite/expo-sqlite — it throws
+          // "Cannot add a column with non-constant default" and aborts the whole
+          // DB init, leaving the app with NO local persistence. Add the column
+          // with no default, then backfill existing rows with a constant value.
+          await db.execAsync(`ALTER TABLE ${table} ADD COLUMN updated_at TEXT;`);
+          await db.execAsync(`UPDATE ${table} SET updated_at = datetime('now') WHERE updated_at IS NULL;`);
         } catch (e: any) {
           if (!e.message?.includes('duplicate column')) throw e;
         }

@@ -503,12 +503,13 @@ export default function OnboardingScreen({
   const isChildStep = ONBOARDING_STEPS[currentIndex]?.nameKey === 'child';
 
   // Requirements to proceed:
-  // - If it's the phone step, phone must be verified.
   // - If it's Emma's (child's) name step, must have a typed name.
+  // - The phone/auth step is OPTIONAL to skip (offline-first): the user may
+  //   verify via OTP, but we never hard-lock onboarding on a successful auth
+  //   round-trip — without this the app is unusable with no network / unconfigured Supabase.
   // - All other slides are immediately unblocked.
   const canProceed = 
-    (!isPhoneStep && !isNameStep) || 
-    (isPhoneStep && phoneVerified) || 
+    (!isNameStep) || 
     (isNameStep && (isChildStep ? names.child.trim().length > 0 : true));
 
   const renderItem = ({ item, index }: { item: OnboardingStep; index: number }) => (
@@ -537,8 +538,12 @@ export default function OnboardingScreen({
       keyboardVerticalOffset={insets.top + 10}
     >
       <View style={[styles.container, { paddingTop: insets.top }]}>
-        {/* Skip Button (only shown on non-auth, non-child-name slides) */}
-        {!isLastStep && !isPhoneStep && !isChildStep && (
+        {/* Skip Button (shown on every non-final slide, including auth —
+            the app is offline-first and must never hard-gate onboarding on
+            a successful Supabase OTP round-trip, which fails with no network
+            or unconfigured auth. Without this the user is permanently stuck
+            on the email step.) */}
+        {!isLastStep && (
           <Animated.View entering={FadeIn.duration(300)} style={styles.skipContainer}>
             <Pressable onPress={handleSkip} style={styles.skipButton}>
               <Text style={styles.skipText}>Skip</Text>

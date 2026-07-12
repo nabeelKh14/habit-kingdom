@@ -208,10 +208,14 @@ export default function RootLayout() {
         const { data: { session } } = await supabase.auth.getSession();
         const complete = await isOnboardingComplete();
 
-        // If there's no active session, we require login/onboarding
-        setShowOnboarding(!session || !complete);
+        // The app is local-first: onboarding completion is the source of truth.
+        // We do NOT require a Supabase session to leave onboarding — getSession()
+        // returns null when auth is unconfigured/offline, and gating on it would
+        // trap the user in onboarding forever (re-shown on every launch). If a
+        // session exists we use it; otherwise we proceed in local-only mode.
+        setShowOnboarding(!complete);
 
-        if (session && complete) {
+        if (complete) {
           // Initialize profiles (create default if none exist)
           const { initializeProfiles } = await import("../lib/storage");
           await initializeProfiles();
